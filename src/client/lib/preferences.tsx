@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -13,27 +14,44 @@ import { useAuth } from "./useAuth";
 import {
   DEFAULT_PREFERENCES,
   type WorkspacePreferences,
+  type ColorMode,
+  type ResolvedColorMode,
 } from "../../shared/preferences";
-import { THEMES, DEFAULT_THEME, type ThemeId } from "../../shared/themeCatalog";
-
-export { THEMES, DEFAULT_THEME, type ThemeId } from "../../shared/themeCatalog";
 
 type PreferencePatch = Partial<WorkspacePreferences>;
 interface PreferencesContextValue {
   preferences: WorkspacePreferences;
-  theme: ThemeId;
+  colorMode: ColorMode;
+  resolvedMode: ResolvedColorMode;
   loading: boolean;
   saving: boolean;
   isSaving: boolean;
   error: string | null;
   updatePreferences: (patch: PreferencePatch) => Promise<boolean>;
-  setTheme: (theme: ThemeId) => Promise<boolean>;
+  setColorMode: (mode: ColorMode) => Promise<boolean>;
   retry: () => Promise<void>;
 }
 const PreferencesContext = createContext<PreferencesContextValue | null>(null);
 
-export function ThemeProvider({ children }: { children: ReactNode }) {
+function readSystemMode(): ResolvedColorMode {
+  return typeof window !== "undefined" &&
+    window.matchMedia?.("(prefers-color-scheme: dark)").matches
+    ? "dark"
+    : "light";
+}
+
+export function PreferencesProvider({ children }: { children: ReactNode }) {
   const { authenticated } = useAuth();
+  const [systemMode, setSystemMode] =
+    useState<ResolvedColorMode>(readSystemMode);
+  useEffect(() => {
+    if (!window.matchMedia) return;
+    const preference = window.matchMedia("(prefers-color-scheme: dark)");
+    const changed = () => setSystemMode(preference.matches ? "dark" : "light");
+    changed();
+    preference.addEventListener("change", changed);
+    return () => preference.removeEventListener("change", changed);
+  }, []);
   const [preferences, setPreferences] =
     useState<WorkspacePreferences>(DEFAULT_PREFERENCES);
   const [loading, setLoading] = useState(false);
@@ -162,7 +180,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
           }
         }
       });
-      // Keep writes ordered so rapid choices cannot restore an older theme.
+      // Keep writes ordered so rapid changes cannot restore an older setting.
       writeQueue.current = operation.then(
         () => undefined,
         () => undefined,
@@ -173,59 +191,64 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   );
 
   const applied = authenticated && loaded ? preferences : DEFAULT_PREFERENCES;
-  const theme = applied.themeId;
-  const activeTheme = THEMES.find((option) => option.id === theme) ?? THEMES[0];
+  const colorMode = applied.colorMode;
+  const resolvedMode = colorMode === "system" ? systemMode : colorMode;
   useLayoutEffect(() => {
     const root = document.documentElement;
-    root.dataset.theme = theme;
-    root.dataset.navigation = activeTheme.navigation;
-    root.dataset.taskLayout = activeTheme.taskLayout;
-    root.dataset.settingsLayout = activeTheme.settingsLayout;
-    root.dataset.controlStyle = activeTheme.controlStyle;
-    root.dataset.mode = activeTheme.mode;
+    for (const attribute of [
+      "theme",
+      "navigation",
+      "taskLayout",
+      "settingsLayout",
+      "controlStyle",
+    ]) {
+      delete root.dataset[attribute];
+    }
+    root.dataset.mode = resolvedMode;
     root.dataset.density = applied.density;
     root.dataset.textSize = applied.textSize;
     root.dataset.reduceMotion = String(applied.reduceMotion);
-    root.style.colorScheme = activeTheme.mode;
-  }, [
-    theme,
-    activeTheme,
-    applied.density,
-    applied.textSize,
-    applied.reduceMotion,
-  ]);
+    root.style.colorScheme = resolvedMode;
+    document
+      .querySelectorAll<HTMLMetaElement>('meta[name="theme-color"]')
+      .forEach((meta) => {
+        meta.content = resolvedMode === "dark" ? "#10131a" : "#f7f8fa";
+      });
+  }, [resolvedMode, applied.density, applied.textSize, applied.reduceMotion]);
 
   const retry = useCallback(async () => {
     if (authenticated && activeSession.current && pendingWrites.current === 0) {
       await readPreferences(generation.current);
     }
   }, [authenticated, readPreferences]);
-  const setTheme = useCallback(
-    (themeId: ThemeId) => updatePreferences({ themeId }),
+  const setColorMode = useCallback(
+    (mode: ColorMode) => updatePreferences({ colorMode: mode }),
     [updatePreferences],
   );
   const value = useMemo(
     () => ({
       preferences: applied,
-      theme,
+      colorMode,
+      resolvedMode,
       loading: authenticated && (!loaded || loading),
       saving: pending > 0,
       isSaving: pending > 0,
       error,
       updatePreferences,
-      setTheme,
+      setColorMode,
       retry,
     }),
     [
       applied,
-      theme,
+      colorMode,
+      resolvedMode,
       authenticated,
       loaded,
       loading,
       pending,
       error,
       updatePreferences,
-      setTheme,
+      setColorMode,
       retry,
     ],
   );
@@ -242,4 +265,3 @@ export function usePreferences() {
   if (!value) throw new Error("Workspace preferences are unavailable.");
   return value;
 }
-export const useTheme = usePreferences;

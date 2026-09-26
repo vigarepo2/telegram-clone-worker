@@ -2,7 +2,7 @@ import { useId, useState, type ReactNode } from "react";
 import { api } from "../lib/api";
 import { Icon } from "./Icon";
 import { Modal } from "./Modal";
-import { InfoLabel, InfoTip } from "./InfoTip";
+import { InfoTip } from "./InfoTip";
 
 type Action = {
   action: string;
@@ -15,17 +15,22 @@ type Action = {
 function ToolOption({
   label,
   explanation,
+  technical = false,
   children,
 }: {
   label: string;
   explanation: string;
+  technical?: boolean;
   children: ReactNode;
 }) {
   return (
     <div className="chat-tool-option">
-      <div className="info-label">
-        <strong>{label}</strong>
-        <InfoTip label={label}>{explanation}</InfoTip>
+      <div>
+        <div className="info-label">
+          <strong>{label}</strong>
+          {technical && <InfoTip label={label}>{explanation}</InfoTip>}
+        </div>
+        {!technical && <p className="helper">{explanation}</p>}
       </div>
       {children}
     </div>
@@ -90,6 +95,7 @@ export function ChatTools({
         <div className="chat-tool-grid">
           <ToolOption
             label="Find latest message ID"
+            technical
             explanation="A message ID is the number at the end of its Telegram link. This check finds the most recent number by posting a temporary message and trying to delete it. Members may see a notification. You can avoid this by copying a message link yourself."
           >
             <button
@@ -109,7 +115,7 @@ export function ChatTools({
           </ToolOption>
           <ToolOption
             label="Send a test message"
-            explanation="Send a visible message to the source chat to check whether this bot can post there. The message is not removed automatically. This does not test copying to the destination."
+            explanation="Post a visible test in the source. It stays there until someone deletes it."
           >
             <button
               type="button"
@@ -134,7 +140,7 @@ export function ChatTools({
           <div className="stack">
             <ToolOption
               label="Create an invite link"
-              explanation="Create a link people can use to join the source chat. Anyone with the link may be able to join, so share it carefully. Your bot needs permission to invite members."
+              explanation="Create a link people can use to join the source chat."
             >
               <button
                 type="button"
@@ -152,11 +158,13 @@ export function ChatTools({
               </button>
             </ToolOption>
             <div className="field">
-              <InfoLabel htmlFor={`${id}-link`} label="Invite link to cancel">
-                Paste an invite link created by this bot. Cancelling it stops
-                people from joining through that link. Members who already
-                joined stay in the chat.
-              </InfoLabel>
+              <label className="form-label" htmlFor={`${id}-link`}>
+                Invite link to cancel
+              </label>
+              <p className="helper">
+                Use a link created by this bot. People who already joined will
+                stay in the chat.
+              </p>
               <div className="row wrap">
                 <input
                   className="input"
@@ -192,11 +200,13 @@ export function ChatTools({
           <summary>Manage a member</summary>
           <div className="stack">
             <div className="field">
-              <InfoLabel htmlFor={`${id}-member`} label="Telegram user ID">
-                Enter the person’s numeric Telegram user ID. This is not their
-                phone number, username, or a message number. Verify the person
-                before making changes.
-              </InfoLabel>
+              <label className="form-label" htmlFor={`${id}-member`}>
+                Telegram user ID
+              </label>
+              <p className="helper">
+                The person’s numeric ID, not their phone number or username.
+                Check it before making changes.
+              </p>
               <input
                 className="input"
                 id={`${id}-member`}
@@ -208,7 +218,7 @@ export function ChatTools({
             </div>
             <ToolOption
               label="Ban a member"
-              explanation="Remove this person and stop them from rejoining the source chat. Your bot must be allowed to restrict members. Check the user ID before confirming."
+              explanation="Remove this person and prevent them from rejoining."
             >
               <button
                 type="button"
@@ -230,7 +240,7 @@ export function ChatTools({
             </ToolOption>
             <ToolOption
               label="Allow a member to rejoin"
-              explanation="Remove this person’s ban. They are not added back automatically; they can join again using a valid invitation or public link."
+              explanation="Remove the ban so this person can join again."
             >
               <button
                 type="button"
@@ -251,7 +261,7 @@ export function ChatTools({
             </ToolOption>
             <ToolOption
               label="Make an administrator"
-              explanation="Give this person permission to delete messages, invite people, and restrict members in the source chat. These are powerful permissions. Your bot must be allowed to appoint administrators."
+              explanation="Allow this person to delete messages, invite people, and restrict members."
             >
               <button
                 type="button"

@@ -3,10 +3,9 @@ import assert from "node:assert/strict";
 import { createD1, loadTypescript } from "./helpers/d1.mjs";
 
 const { default: worker } = await loadTypescript("src/index.ts");
-const { DEFAULT_PREFERENCES } = await loadTypescript(
+const { DEFAULT_PREFERENCES, COLOR_MODES } = await loadTypescript(
   "src/shared/preferences.ts",
 );
-const { THEMES } = await loadTypescript("src/shared/themeCatalog.ts");
 const password = "workspace preferences password";
 const origin = "https://workspace.example";
 
@@ -55,7 +54,7 @@ test("preferences require authentication for reads and writes, including before 
     (
       await call(env, "/api/preferences", {
         method: "PATCH",
-        body: { themeId: "harbor" },
+        body: { colorMode: "dark" },
       })
     ).status,
     401,
@@ -66,18 +65,18 @@ test("preferences require authentication for reads and writes, including before 
     (
       await call(configured.env, "/api/preferences", {
         method: "PATCH",
-        body: { themeId: "harbor" },
+        body: { colorMode: "dark" },
       })
     ).status,
     401,
   );
   assert.equal(
-    (await preferences(configured.env, configured.cookie)).themeId,
-    "canvas",
+    (await preferences(configured.env, configured.cookie)).colorMode,
+    "system",
   );
 });
 
-test("new workspaces return complete Canvas defaults without exposing app settings", async (t) => {
+test("new workspaces follow the system appearance by default without exposing app settings", async (t) => {
   const { env, cookie } = await fixture(t);
   env.DB.sqlite
     .prepare(
@@ -86,7 +85,7 @@ test("new workspaces return complete Canvas defaults without exposing app settin
     .run();
   const result = await preferences(env, cookie);
   assert.deepEqual(result, {
-    themeId: "canvas",
+    colorMode: "system",
     density: "comfortable",
     textSize: "standard",
     reduceMotion: false,
@@ -104,7 +103,7 @@ test("partial preference changes preserve other saved fields", async (t) => {
     method: "PATCH",
     cookie,
     body: {
-      themeId: "harbor",
+      colorMode: "dark",
       density: "compact",
       reduceMotion: true,
       defaultTaskScope: "live_and_backfill",
@@ -119,7 +118,7 @@ test("partial preference changes preserve other saved fields", async (t) => {
   assert.equal(second.status, 200);
   assert.deepEqual((await second.json()).data, {
     ...DEFAULT_PREFERENCES,
-    themeId: "harbor",
+    colorMode: "dark",
     density: "compact",
     reduceMotion: true,
     defaultTaskScope: "live_and_backfill",
@@ -128,7 +127,7 @@ test("partial preference changes preserve other saved fields", async (t) => {
   });
   assert.deepEqual(await preferences(env, cookie), {
     ...DEFAULT_PREFERENCES,
-    themeId: "harbor",
+    colorMode: "dark",
     density: "compact",
     reduceMotion: true,
     defaultTaskScope: "live_and_backfill",
@@ -140,7 +139,7 @@ test("partial preference changes preserve other saved fields", async (t) => {
 test("preferences survive logout, a fresh session and a new environment object", async (t) => {
   const { env, cookie } = await fixture(t);
   const saved = {
-    themeId: "cinema",
+    colorMode: "dark",
     density: "compact",
     showTaskStats: false,
     defaultSaveSetup: true,
@@ -175,20 +174,17 @@ test("preferences survive logout, a fresh session and a new environment object",
   });
 });
 
-test("unknown settings, wrong types and retired theme IDs are rejected atomically", async (t) => {
+test("unknown settings, wrong types and obsolete theme fields are rejected atomically", async (t) => {
   const { env, cookie } = await fixture(t);
   const invalidBodies = [
-    { themeId: "cloud" },
-    { themeId: "graphite" },
-    { themeId: "paper" },
-    { themeId: "sage" },
-    { themeId: "studio" },
-    { themeId: "midnight" },
-    { themeId: "terracotta" },
-    { themeId: "terminal" },
-    { themeId: "unknown" },
-    { themeId: null },
-    { themeId: "Canvas" },
+    { colorMode: "canvas" },
+    { colorMode: "harbor" },
+    { colorMode: "sepia" },
+    { colorMode: null },
+    { colorMode: true },
+    { colorMode: "Light" },
+    { themeId: "canvas" },
+    { themeId: "harbor" },
     { density: "dense" },
     { textSize: 2 },
     { reduceMotion: "true" },
@@ -196,12 +192,12 @@ test("unknown settings, wrong types and retired theme IDs are rejected atomicall
     { defaultTaskScope: "all" },
     { defaultSaveSetup: "false" },
     { extra: true },
-    { themeId: "harbor", textSize: "tiny" },
-    { themeId: "harbor", admin_password_hash: "overwrite" },
+    { colorMode: "dark", textSize: "tiny" },
+    { colorMode: "dark", admin_password_hash: "overwrite" },
     [],
     null,
-    "canvas",
-    JSON.parse('{"__proto__":{"themeId":"harbor"}}'),
+    "system",
+    JSON.parse('{"__proto__":{"colorMode":"dark"}}'),
   ];
   for (const body of invalidBodies) {
     const response = await call(env, "/api/preferences", {
@@ -223,25 +219,24 @@ test("unknown settings, wrong types and retired theme IDs are rejected atomicall
   );
 });
 
-test("all 20 catalog themes can be saved and returned", async (t) => {
+test("system, light and dark appearance choices can be saved and returned", async (t) => {
   const { env, cookie } = await fixture(t);
-  assert.equal(THEMES.length, 20);
-  assert.equal(new Set(THEMES.map((theme) => theme.id)).size, 20);
-  for (const theme of THEMES) {
+  assert.deepEqual(COLOR_MODES, ["system", "light", "dark"]);
+  for (const colorMode of COLOR_MODES) {
     const response = await call(env, "/api/preferences", {
       method: "PATCH",
       cookie,
-      body: { themeId: theme.id },
+      body: { colorMode },
     });
-    assert.equal(response.status, 200, theme.id);
-    assert.equal((await response.json()).data.themeId, theme.id);
+    assert.equal(response.status, 200, colorMode);
+    assert.equal((await response.json()).data.colorMode, colorMode);
   }
 });
 
 test("simultaneous patches of different settings preserve every change", async (t) => {
   const { env, cookie } = await fixture(t);
   const patches = [
-    { themeId: "mosaic" },
+    { colorMode: "light" },
     { textSize: "large" },
     { density: "compact" },
     { reduceMotion: true },
@@ -262,7 +257,7 @@ test("simultaneous patches of different settings preserve every change", async (
 test("invalid stored appearance values fall back independently and unrelated rows stay private", async (t) => {
   const { env, cookie } = await fixture(t);
   for (const [key, value] of [
-    ["themeId", '"cloud"'],
+    ["colorMode", '"obsolete-mode"'],
     ["density", '"compact"'],
     ["textSize", "not-json"],
     ["reduceMotion", '"true"'],
@@ -288,7 +283,7 @@ test("cross-origin writes and database outages do not silently reset preferences
       await call(env, "/api/preferences", {
         method: "PATCH",
         cookie,
-        body: { themeId: "harbor" },
+        body: { colorMode: "dark" },
         requestOrigin: "https://other.example",
       })
     ).status,
@@ -299,7 +294,7 @@ test("cross-origin writes and database outages do not silently reset preferences
       await call(env, "/api/preferences", {
         method: "PATCH",
         cookie,
-        body: { themeId: "harbor" },
+        body: { colorMode: "dark" },
       })
     ).status,
     200,
@@ -311,11 +306,38 @@ test("cross-origin writes and database outages do not silently reset preferences
       await call(env, "/api/preferences", {
         method: "PATCH",
         cookie,
-        body: { themeId: "canvas" },
+        body: { colorMode: "system" },
       })
     ).status,
     503,
   );
   env.DB.unavailable = false;
-  assert.equal((await preferences(env, cookie)).themeId, "harbor");
+  assert.equal((await preferences(env, cookie)).colorMode, "dark");
+});
+
+test("obsolete saved theme IDs stay harmless and do not change the new appearance default", async (t) => {
+  const { env, cookie } = await fixture(t);
+  env.DB.sqlite
+    .prepare(
+      "INSERT INTO app_settings(key,value) VALUES ('workspace_preference:themeId', ?)",
+    )
+    .run('"cinema"');
+  const result = await preferences(env, cookie);
+  assert.equal(result.colorMode, "system");
+  assert.equal(Object.hasOwn(result, "themeId"), false);
+  const saved = await call(env, "/api/preferences", {
+    method: "PATCH",
+    cookie,
+    body: { colorMode: "dark" },
+  });
+  assert.equal(saved.status, 200);
+  assert.equal((await preferences(env, cookie)).colorMode, "dark");
+  assert.equal(
+    env.DB.sqlite
+      .prepare(
+        "SELECT value FROM app_settings WHERE key = 'workspace_preference:themeId'",
+      )
+      .get().value,
+    '"cinema"',
+  );
 });

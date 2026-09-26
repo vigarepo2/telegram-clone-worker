@@ -10,7 +10,7 @@ The screenshots use example data. Your dashboard starts empty.
 
 ![Desktop dashboard](docs/images/dashboard.png)
 
-[Phone layout](docs/images/dashboard_mobile.png) · [Task details](docs/images/task_detail.png)
+[Phone layout](docs/images/dashboard_mobile.png) · [Dark mode](docs/images/dashboard_dark.png) · [Task details](docs/images/task_detail.png)
 
 ## Deploy
 
@@ -60,53 +60,26 @@ Use a dedicated bot for this app. Telegram allows only one update consumer for a
 
 - A message range copies the IDs between the start and end. Deleted, service, or otherwise uncopyable messages may be skipped by Telegram.
 - The recent-message option finds the latest ID by briefly posting a probe in the source, then deleting it. It needs posting and deletion rights. If cleanup fails, remove the probe manually. The selected number is an ID window, not a guarantee of that many surviving posts.
-- Message-type, file-format, and size filters apply to **new incoming messages**. Telegram's Bot API does not provide arbitrary historical message metadata, so those filters cannot reliably filter a history range.
+- Message-type and size filters apply to **new incoming messages**. Telegram's Bot API does not provide arbitrary historical message metadata, so those filters cannot reliably filter a history range.
 - Content protected against copying cannot be copied through the Bot API.
 - [Telegram normally keeps pending bot updates](https://core.telegram.org/bots/api#getting-updates) for no more than 24 hours. A long outage can leave a gap in live copying; use a known history range to recover it.
 - Sending to Telegram and saving progress in D1 are separate operations. A crash between them can cause a repeat. Exactly-once delivery is not promised.
 
-### File formats
+## A simpler workspace
 
-The new-message filter offers **263 extensions in ten groups**, including Photos, Videos, Audio, Documents, and Archives. Search for a format, choose individual extensions, or select a whole group. A video sent as a Telegram document can still match a selected `.mp4` or `.mov` format.
+Use **Tasks** to see all copying jobs, or switch to Active, Paused, and History. Each task has a clear status and a direct Details button. On phones, Tasks, Bots, Saved, and Settings are always available in the bottom navigation.
 
-Extension filters use the filename supplied by Telegram, or a specific known format from its media metadata. They do not convert files, inspect file contents, or make files safe to open. If Telegram provides neither a usable filename nor a known format, an active extension filter skips that message. Ordinary Telegram photos often have no original filename; leave formats unrestricted if you want to include all such photos.
+Task setup walks through choosing a bot, checking both chats, choosing messages, and reviewing before copying starts. Optional message-type and size filters are under **More options**. There is no file-extension picker; old extension selections no longer restrict copying.
 
-Optional Telegram message-type and file-size filters are separate rules. A message must pass every enabled rule. Clearing the extension selection restores **Any format**. Existing-message ranges are not filtered by format.
+## Display and settings
 
-## Appearance and settings
+The app uses one layout with **Light**, **Dark**, or **Follow device** appearance. Use the button in the top bar to switch between light and dark, or select a mode in Settings. Icons, logos, forms, status messages, and dialogs use the same mode.
 
-Open **Settings → Appearance** to choose from twenty themes. Canvas and Contrast remain; the other eighteen replace the earlier designs. Themes change the navigation, task arrangement, settings sections, fields, and controls as well as colors and typography.
+Your display choice is saved in D1 and restored after sign-in, including on another device. The signed-out page follows the device’s light/dark preference. Old theme selections are ignored.
 
-**Canvas is the default.** Your selected theme is saved in D1 and restored when you sign in, including from a different browser or phone. Signing out returns the sign-in page to Canvas without changing your saved choice.
+Settings also offers larger text, reduced motion, spacing, task totals, and starting choices for new tasks. Less-used options are collapsed. Password changes and sign-out are in Account access. Existing tasks keep their settings when you change task defaults.
 
-| Theme     | Navigation          | Tasks and settings               |
-| --------- | ------------------- | -------------------------------- |
-| Canvas    | Floating navigation | Task cards; section sidebar      |
-| Contrast  | Top navigation      | Task rows; stacked sections      |
-| Editorial | Top navigation      | Reading layout; section columns  |
-| Harbor    | Right navigation    | Task rows; section sidebar       |
-| Ledger    | Left navigation     | Compact list; section rail       |
-| Atelier   | Floating navigation | Task board; section columns      |
-| Orbit     | Slim navigation     | Task cards; section rail         |
-| Deck      | Bottom dock         | Task board; stacked sections     |
-| Blueprint | Left navigation     | Task rows; section columns       |
-| Garden    | Right navigation    | Task cards; section sidebar      |
-| Gallery   | Top navigation      | Task cards; section columns      |
-| Signal    | Slim navigation     | Compact list; section rail       |
-| Mono      | Left navigation     | Reading layout; stacked sections |
-| Notebook  | Left navigation     | Task rows; section sidebar       |
-| Workshop  | Top navigation      | Compact list; section columns    |
-| Focus     | Slim navigation     | Reading layout; section sidebar  |
-| Cinema    | Bottom dock         | Task cards; section rail         |
-| Column    | Right navigation    | Reading layout; stacked sections |
-| Mosaic    | Floating navigation | Task board; section columns      |
-| Metro     | Top navigation      | Task rows; section rail          |
-
-Settings also includes spacing, larger text, reduced motion, task totals, default messages to copy, and saving new setups by default. These choices are saved to the workspace. Task defaults only affect new tasks; existing tasks keep their settings.
-
-Tap an **i** beside an option for a short explanation. The Help page has searchable questions grouped by getting started, choosing messages, files and filters, troubleshooting, and privacy.
-
-All app icons and brand assets live in [`src/assets`](src/assets). Icons are SVG files rather than emoji or a remote icon service. Fonts use the device's installed system fonts.
+Help has a short getting-started guide and practical questions in plain language. All app icons and the logo live in [`src/assets`](src/assets); the app uses local SVGs and system fonts.
 
 ## Security
 
@@ -162,7 +135,7 @@ Before a major update, take a D1 export or confirm that your account's database 
 
 ```text
 src/assets/       SVG icons and logo
-src/client/       React interface and themes
+src/client/       React interface and display preferences
 src/auth/         Passwords, sessions, and request protection
 src/db/           D1 initialization and queries
 src/routes/api/   Bots, chats, tasks, and saved configurations

@@ -1,4 +1,4 @@
-import type { SVGProps } from "react";
+import { useId, type SVGProps } from "react";
 
 const files = import.meta.glob<string>("../../assets/icons/*.svg", {
   eager: true,
@@ -12,7 +12,7 @@ const marks = import.meta.glob<string>("../../assets/logo.svg", {
 });
 
 // Only bundled assets can supply markup; icon names never become markup or URLs.
-const artwork = Object.fromEntries(
+const artwork = new Map(
   Object.entries({ ...files, ...marks }).map(([path, svg]) => [
     path
       .split("/")
@@ -124,11 +124,19 @@ export function Icon({
   size = 20,
   title,
   className,
+  "aria-label": ariaLabel,
+  "aria-labelledby": ariaLabelledBy,
+  "aria-hidden": ariaHidden,
   ...props
 }: IconProps) {
-  const label = props["aria-label"] ?? title;
+  const titleId = useId();
+  const label = ariaLabel?.trim();
+  const titleText = title?.trim();
+  const labelledBy = ariaLabelledBy || (titleText ? titleId : undefined);
+  const hasLabel = Boolean(label || labelledBy);
   return (
     <svg
+      {...props}
       xmlns="http://www.w3.org/2000/svg"
       viewBox="0 0 24 24"
       fill="none"
@@ -139,13 +147,19 @@ export function Icon({
       width={size}
       height={size}
       focusable="false"
-      aria-hidden={label ? undefined : true}
-      role={label ? "img" : undefined}
+      aria-hidden={ariaHidden ?? (hasLabel ? undefined : true)}
+      role={hasLabel ? "img" : undefined}
       aria-label={label}
+      aria-labelledby={label ? undefined : labelledBy}
       className={className ? `icon ${className}` : "icon"}
-      {...props}
-      dangerouslySetInnerHTML={{ __html: artwork[name] ?? artwork.info }}
-    />
+    >
+      {titleText && <title id={titleId}>{titleText}</title>}
+      <g
+        dangerouslySetInnerHTML={{
+          __html: artwork.get(name) ?? artwork.get("info")!,
+        }}
+      />
+    </svg>
   );
 }
 

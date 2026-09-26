@@ -1,7 +1,6 @@
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { Icon } from "./Icon";
-import "../styles/help.css";
 
 /** A tap or keyboard-accessible explanation, including on touch screens. */
 export function InfoTip({

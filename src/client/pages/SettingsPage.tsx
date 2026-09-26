@@ -1,175 +1,67 @@
-import { useId, useState, type FormEvent, type ReactNode } from "react";
+import { useState, type FormEvent, type ReactNode } from "react";
 import { api } from "../lib/api";
 import { useAuth } from "../lib/useAuth";
-import { usePreferences, useTheme } from "../lib/themes";
-import { THEMES } from "../../shared/themeCatalog";
+import { usePreferences } from "../lib/preferences";
 import { useToast } from "../components/Toast";
 import { PageHero } from "../components/PageHero";
 import { AppearancePanel } from "../components/AppearancePanel";
-import { Icon, type IconName } from "../components/Icon";
-import { InfoTip, InfoLabel } from "../components/InfoTip";
-
-type SectionId = "appearance" | "reading" | "defaults" | "security";
-const sections: {
-  id: SectionId;
-  label: string;
-  description: string;
-  icon: IconName;
-}[] = [
-  {
-    id: "appearance",
-    label: "Appearance",
-    description: "Theme and layout",
-    icon: "palette",
-  },
-  {
-    id: "reading",
-    label: "Display",
-    description: "Text, spacing, and motion",
-    icon: "monitor",
-  },
-  {
-    id: "defaults",
-    label: "Task defaults",
-    description: "Starting preferences",
-    icon: "tasks",
-  },
-  {
-    id: "security",
-    label: "Security",
-    description: "Workspace password",
-    icon: "lock",
-  },
-];
-
-function PreferenceChoices<T extends string>({
-  label,
-  value,
-  options,
-  onChange,
-  disabled,
-  style,
-}: {
-  label: string;
-  value: T;
-  options: { value: T; label: string; detail?: string }[];
-  onChange: (value: T) => void;
-  disabled: boolean;
-  style: string;
-}) {
-  const id = useId();
-  if (style === "underline") {
-    return (
-      <select
-        className="input settings-select"
-        aria-label={label}
-        value={value}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value as T)}
-      >
-        {options.map((option) => (
-          <option key={option.value} value={option.value}>
-            {option.label}
-          </option>
-        ))}
-      </select>
-    );
-  }
-  return (
-    <fieldset
-      className={
-        style === "outlined" ? "preference-choice-grid" : "segmented-control"
-      }
-      aria-label={label}
-      disabled={disabled}
-    >
-      <legend className="sr-only">{label}</legend>
-      {options.map((option) => (
-        <label
-          key={option.value}
-          className={`preference-choice${value === option.value ? " is-active" : ""}`}
-        >
-          <input
-            type="radio"
-            name={id}
-            value={option.value}
-            checked={value === option.value}
-            onChange={() => onChange(option.value)}
-          />
-          <span>
-            <strong>{option.label}</strong>
-            {style === "outlined" && option.detail && (
-              <small>{option.detail}</small>
-            )}
-          </span>
-          {style === "outlined" && value === option.value && (
-            <Icon name="check-circle" size={18} />
-          )}
-        </label>
-      ))}
-    </fieldset>
-  );
-}
-
-function SettingOption({
+import { Icon } from "../components/Icon";
+function SettingRow({
   label,
   help,
   children,
 }: {
   label: string;
-  help: string;
+  help?: string;
   children: ReactNode;
 }) {
   return (
     <div className="settings-option">
       <div className="settings-option-copy">
-        <div className="settings-option-title">
-          <span>{label}</span>
-          <InfoTip label={label}>{help}</InfoTip>
-        </div>
-        <p className="helper">{help}</p>
+        <span className="settings-option-title">{label}</span>
+        {help && <p className="helper">{help}</p>}
       </div>
       <div className="settings-option-control">{children}</div>
     </div>
   );
 }
-
+function Switch({
+  label,
+  checked,
+  disabled,
+  onChange,
+}: {
+  label: string;
+  checked: boolean;
+  disabled: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <label className="switch-control">
+      <input
+        type="checkbox"
+        role="switch"
+        checked={checked}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.checked)}
+        aria-label={label}
+      />
+      <span className="switch-track" aria-hidden="true" />
+      <span className="sr-only">{checked ? "On" : "Off"}</span>
+    </label>
+  );
+}
 export function SettingsPage() {
   const auth = useAuth();
   const toast = useToast();
-  const { theme } = useTheme();
-  const {
-    preferences,
-    loading,
-    saving,
-    error: preferencesError,
-    updatePreferences,
-    retry,
-  } = usePreferences();
-  const recipe = THEMES.find((item) => item.id === theme) ?? THEMES[0];
-  const layout = recipe.settingsLayout;
-  const focused = layout === "split" || layout === "rail";
-  const [section, setSection] = useState<SectionId>("appearance");
+  const { preferences, loading, saving, error, updatePreferences, retry } =
+    usePreferences();
   const [current, setCurrent] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
   const [busy, setBusy] = useState(false);
   const [passwordError, setPasswordError] = useState("");
   const disabled = loading || saving;
-
-  function selectSection(next: SectionId) {
-    setSection(next);
-    if (!focused)
-      requestAnimationFrame(() =>
-        document
-          .getElementById(`settings-${next}`)
-          ?.scrollIntoView({
-            behavior: preferences.reduceMotion ? "instant" : "smooth",
-            block: "start",
-          }),
-      );
-  }
-
   async function changePassword(event: FormEvent) {
     event.preventDefault();
     setPasswordError("");
@@ -200,349 +92,250 @@ export function SettingsPage() {
     );
     await auth.refreshStatus();
   }
-
-  const content: Record<SectionId, ReactNode> = {
-    appearance: (
-      <>
-        <div className="settings-section-heading">
-          <Icon name="palette" />
-          <div>
-            <h2 className="card-title">Appearance</h2>
-            <p className="helper">
-              Change the entire workspace layout, navigation, and controls.
-            </p>
-          </div>
-          <InfoTip label="Workspace theme">
-            Each theme has its own page layout, navigation, form style, and
-            controls. Your choice is saved for this workspace. The sign-in
-            screen always uses Canvas.
-          </InfoTip>
-        </div>
-        <AppearancePanel />
-      </>
-    ),
-    reading: (
-      <>
-        <div className="settings-section-heading">
-          <Icon name="monitor" />
-          <div>
-            <h2 className="card-title">Display</h2>
-            <p className="helper">
-              Adjust the workspace for comfortable reading.
-            </p>
-          </div>
-        </div>
-        <SettingOption
-          label="Spacing"
-          help="Comfortable gives controls more room. Compact fits more information on each page."
-        >
-          <PreferenceChoices
-            label="Spacing"
-            value={preferences.density}
-            options={[
-              {
-                value: "comfortable",
-                label: "Comfortable",
-                detail: "More room between controls",
-              },
-              {
-                value: "compact",
-                label: "Compact",
-                detail: "More information per page",
-              },
-            ]}
-            onChange={(density) => void updatePreferences({ density })}
-            disabled={disabled}
-            style={recipe.controlStyle}
-          />
-        </SettingOption>
-        <SettingOption
-          label="Text size"
-          help="Large text makes labels, forms, and task information easier to read."
-        >
-          <PreferenceChoices
-            label="Text size"
-            value={preferences.textSize}
-            options={[
-              {
-                value: "standard",
-                label: "Standard",
-                detail: "Default reading size",
-              },
-              {
-                value: "large",
-                label: "Large",
-                detail: "Larger labels and body text",
-              },
-            ]}
-            onChange={(textSize) => void updatePreferences({ textSize })}
-            disabled={disabled}
-            style={recipe.controlStyle}
-          />
-        </SettingOption>
-        <SettingOption
-          label="Reduce motion"
-          help="Turns off decorative transitions. Your device’s reduced-motion setting is also respected."
-        >
-          <label className="switch-control">
-            <input
-              type="checkbox"
-              role="switch"
-              checked={preferences.reduceMotion}
-              disabled={disabled}
-              onChange={(event) =>
-                void updatePreferences({ reduceMotion: event.target.checked })
-              }
-              aria-label="Reduce motion"
-            />
-            <span className="switch-track" aria-hidden="true" />
-            <span>{preferences.reduceMotion ? "On" : "Off"}</span>
-          </label>
-        </SettingOption>
-        <SettingOption
-          label="Show task totals"
-          help="Show the active-task, copied-message, and connected-bot totals above your task list."
-        >
-          <label className="switch-control">
-            <input
-              type="checkbox"
-              role="switch"
-              checked={preferences.showTaskStats}
-              disabled={disabled}
-              onChange={(event) =>
-                void updatePreferences({ showTaskStats: event.target.checked })
-              }
-              aria-label="Show task totals"
-            />
-            <span className="switch-track" aria-hidden="true" />
-            <span>{preferences.showTaskStats ? "On" : "Off"}</span>
-          </label>
-        </SettingOption>
-      </>
-    ),
-    defaults: (
-      <>
-        <div className="settings-section-heading">
-          <Icon name="tasks" />
-          <div>
-            <h2 className="card-title">Task defaults</h2>
-            <p className="helper">
-              Choose the starting values for new tasks. Existing tasks stay
-              unchanged.
-            </p>
-          </div>
-        </div>
-        <SettingOption
-          label="Messages to copy"
-          help="Preselects which messages a new task will copy. You can change this before starting each task."
-        >
-          <PreferenceChoices
-            label="Default messages to copy"
-            value={preferences.defaultTaskScope}
-            options={[
-              {
-                value: "live",
-                label: "New messages",
-                detail: "Keep copying new posts",
-              },
-              {
-                value: "backfill_only",
-                label: "Existing messages",
-                detail: "Copy a history range once",
-              },
-              {
-                value: "live_and_backfill",
-                label: "Existing + new",
-                detail: "Copy history, then new posts",
-              },
-            ]}
-            onChange={(defaultTaskScope) =>
-              void updatePreferences({ defaultTaskScope })
-            }
-            disabled={disabled}
-            style={recipe.controlStyle}
-          />
-        </SettingOption>
-        <SettingOption
-          label="Save new setups"
-          help="Preselects “Save this setup” when creating a task so you can reuse its bot, chats, and filters later."
-        >
-          <label className="switch-control">
-            <input
-              type="checkbox"
-              role="switch"
-              checked={preferences.defaultSaveSetup}
-              disabled={disabled}
-              onChange={(event) =>
-                void updatePreferences({
-                  defaultSaveSetup: event.target.checked,
-                })
-              }
-              aria-label="Save new setups by default"
-            />
-            <span className="switch-track" aria-hidden="true" />
-            <span>{preferences.defaultSaveSetup ? "On" : "Off"}</span>
-          </label>
-        </SettingOption>
-      </>
-    ),
-    security: (
-      <>
-        <div className="settings-section-heading">
-          <Icon name="lock" />
-          <div>
-            <h2 className="card-title">Workspace password</h2>
-            <p className="helper">Control access to your bots and tasks.</p>
-          </div>
-          <InfoTip label="Workspace password">
-            The password is required before anyone can view or change this
-            workspace. Changing it signs out other sessions. Your bots and tasks
-            keep running.
-          </InfoTip>
-        </div>
-        {auth.source === "env" ? (
-          <p className="text-muted">
-            Your password is managed in your Cloudflare Worker’s ADMIN_PASSWORD
-            secret. Update it there to change it.
-          </p>
-        ) : (
-          <form className="stack settings-form" onSubmit={changePassword}>
-            <div className="field">
-              <InfoLabel htmlFor="current-password" label="Current password">
-                Enter the password you used to sign in. This confirms that you
-                can change workspace access.
-              </InfoLabel>
-              <input
-                className="input"
-                id="current-password"
-                type="password"
-                autoComplete="current-password"
-                required
-                value={current}
-                disabled={busy}
-                onChange={(event) => setCurrent(event.target.value)}
-              />
-            </div>
-            <div className="form-grid">
-              <div className="field">
-                <InfoLabel htmlFor="new-password" label="New password">
-                  Use at least 12 characters. A few unrelated words make a
-                  password easier to remember.
-                </InfoLabel>
-                <input
-                  className="input"
-                  id="new-password"
-                  type="password"
-                  autoComplete="new-password"
-                  minLength={12}
-                  maxLength={256}
-                  required
-                  value={password}
-                  disabled={busy}
-                  onChange={(event) => setPassword(event.target.value)}
-                />
-                <p className="helper">At least 12 characters.</p>
-              </div>
-              <div className="field">
-                <InfoLabel htmlFor="confirm-new" label="Confirm new password">
-                  Enter your new password again to check for typing mistakes.
-                </InfoLabel>
-                <input
-                  className="input"
-                  id="confirm-new"
-                  type="password"
-                  autoComplete="new-password"
-                  minLength={12}
-                  maxLength={256}
-                  required
-                  value={confirm}
-                  disabled={busy}
-                  onChange={(event) => setConfirm(event.target.value)}
-                />
-              </div>
-            </div>
-            {passwordError && (
-              <p className="alert alert-error" role="alert">
-                {passwordError}
-              </p>
-            )}
-            <div className="row wrap">
-              <button className="button button-primary" disabled={busy}>
-                {busy ? "Updating…" : "Change password"}
-              </button>
-              <p className="helper">Other sessions will be signed out.</p>
-            </div>
-          </form>
-        )}
-      </>
-    ),
-  };
-
   return (
     <div className="content-container settings-page">
       <PageHero
         title="Settings"
-        subtitle="Appearance, task preferences, and workspace access."
+        subtitle="Make the workspace comfortable for you."
       >
         <span className="settings-save-status" role="status" aria-live="polite">
-          <Icon name={saving ? "clock" : "check-circle"} size={16} />
-          {loading
-            ? "Loading preferences…"
-            : saving
-              ? "Saving…"
+          {saving
+            ? "Saving…"
+            : error
+              ? "Could not save changes"
               : "Changes save automatically"}
         </span>
       </PageHero>
-      {preferencesError && (
+      {error && (
         <div className="alert alert-error" role="alert">
-          <span>{preferencesError}</span>
+          <span>{error}</span>
           <button
             className="button button-secondary button-sm"
             onClick={() => void retry()}
           >
-            Retry
+            Try again
           </button>
         </div>
       )}
-      <div className={`settings-layout settings-layout-${layout}`}>
-        <nav className="settings-nav" aria-label="Settings sections">
-          {sections.map((item) => (
-            <button
-              key={item.id}
-              type="button"
-              className={`settings-nav-item${section === item.id ? " is-active" : ""}`}
-              onClick={() => selectSection(item.id)}
-              aria-current={section === item.id ? "true" : undefined}
-              title={layout === "rail" ? item.label : undefined}
-            >
-              <Icon name={item.icon} />
-              <span>
-                <strong>{item.label}</strong>
-                {layout === "split" && <small>{item.description}</small>}
-              </span>
-              <Icon
-                className="settings-nav-arrow"
-                name="chevron-right"
-                size={15}
-              />
-            </button>
-          ))}
-        </nav>
-        <div className="settings-content">
-          {sections
-            .filter((item) => !focused || item.id === section)
-            .map((item) => (
-              <section
-                className={`card settings-section settings-section-${item.id}`}
-                data-settings-section={item.id}
-                id={`settings-${item.id}`}
-                key={item.id}
-                aria-label={item.label}
+      <div className="settings-stack">
+        <section
+          className="card settings-section"
+          aria-labelledby="display-title"
+        >
+          <div className="section-heading">
+            <Icon name="monitor" size={20} />
+            <h2 id="display-title">Display</h2>
+          </div>
+          <AppearancePanel />
+          <SettingRow
+            label="Larger text"
+            help="Make labels and messages easier to read."
+          >
+            <Switch
+              label="Larger text"
+              checked={preferences.textSize === "large"}
+              disabled={disabled}
+              onChange={(value) =>
+                void updatePreferences({
+                  textSize: value ? "large" : "standard",
+                })
+              }
+            />
+          </SettingRow>
+          <SettingRow
+            label="Reduce motion"
+            help="Keep screen changes and transitions still."
+          >
+            <Switch
+              label="Reduce motion"
+              checked={preferences.reduceMotion}
+              disabled={disabled}
+              onChange={(value) =>
+                void updatePreferences({ reduceMotion: value })
+              }
+            />
+          </SettingRow>
+          <details className="settings-disclosure">
+            <summary>
+              More display options
+              <Icon name="chevron-down" size={16} />
+            </summary>
+            <SettingRow label="Spacing">
+              <select
+                className="input settings-select"
+                aria-label="Spacing"
+                value={preferences.density}
+                disabled={disabled}
+                onChange={(event) =>
+                  void updatePreferences({
+                    density: event.target.value as "comfortable" | "compact",
+                  })
+                }
               >
-                {content[item.id]}
-              </section>
-            ))}
-        </div>
+                <option value="comfortable">Comfortable</option>
+                <option value="compact">Compact</option>
+              </select>
+            </SettingRow>
+            <SettingRow
+              label="Show task totals"
+              help="Show a summary above your task list."
+            >
+              <Switch
+                label="Show task totals"
+                checked={preferences.showTaskStats}
+                disabled={disabled}
+                onChange={(value) =>
+                  void updatePreferences({ showTaskStats: value })
+                }
+              />
+            </SettingRow>
+          </details>
+        </section>
+        <details className="card settings-section settings-disclosure">
+          <summary>
+            <span className="section-heading">
+              <Icon name="tasks" size={20} />
+              <span>New task defaults</span>
+            </span>
+            <Icon name="chevron-down" size={17} />
+          </summary>
+          <p className="helper">
+            Starting choices for new tasks. You can change them during setup.
+          </p>
+          <SettingRow label="Messages to copy">
+            <select
+              className="input settings-select"
+              aria-label="Default messages to copy"
+              value={preferences.defaultTaskScope}
+              disabled={disabled}
+              onChange={(event) =>
+                void updatePreferences({
+                  defaultTaskScope: event.target
+                    .value as typeof preferences.defaultTaskScope,
+                })
+              }
+            >
+              <option value="live">New messages</option>
+              <option value="backfill_only">Existing messages</option>
+              <option value="live_and_backfill">Existing + new messages</option>
+            </select>
+          </SettingRow>
+          <SettingRow
+            label="Save setups for reuse"
+            help="Keep the bot and chat choices for another task."
+          >
+            <Switch
+              label="Save new setups by default"
+              checked={preferences.defaultSaveSetup}
+              disabled={disabled}
+              onChange={(value) =>
+                void updatePreferences({ defaultSaveSetup: value })
+              }
+            />
+          </SettingRow>
+        </details>
+        <section
+          className="card settings-section"
+          aria-labelledby="access-title"
+        >
+          <div className="section-heading">
+            <Icon name="lock" size={20} />
+            <h2 id="access-title">Account access</h2>
+          </div>
+          <details className="settings-disclosure">
+            <summary>
+              Change password
+              <Icon name="chevron-down" size={16} />
+            </summary>
+            {auth.source === "env" ? (
+              <p className="helper">
+                Your password is set in your Cloudflare Worker’s ADMIN_PASSWORD
+                secret. Change it there.
+              </p>
+            ) : (
+              <form className="stack settings-form" onSubmit={changePassword}>
+                <p className="helper">
+                  Changing your password signs out other sessions. Your tasks
+                  keep running.
+                </p>
+                <div className="field">
+                  <label className="form-label" htmlFor="current-password">
+                    Current password
+                  </label>
+                  <input
+                    className="input"
+                    id="current-password"
+                    type="password"
+                    autoComplete="current-password"
+                    required
+                    value={current}
+                    disabled={busy}
+                    onChange={(event) => setCurrent(event.target.value)}
+                  />
+                </div>
+                <div className="form-grid">
+                  <div className="field">
+                    <label className="form-label" htmlFor="new-password">
+                      New password
+                    </label>
+                    <input
+                      className="input"
+                      id="new-password"
+                      type="password"
+                      autoComplete="new-password"
+                      minLength={12}
+                      maxLength={256}
+                      required
+                      value={password}
+                      disabled={busy}
+                      onChange={(event) => setPassword(event.target.value)}
+                    />
+                    <p className="helper">At least 12 characters.</p>
+                  </div>
+                  <div className="field">
+                    <label className="form-label" htmlFor="confirm-new">
+                      Confirm new password
+                    </label>
+                    <input
+                      className="input"
+                      id="confirm-new"
+                      type="password"
+                      autoComplete="new-password"
+                      minLength={12}
+                      maxLength={256}
+                      required
+                      value={confirm}
+                      disabled={busy}
+                      onChange={(event) => setConfirm(event.target.value)}
+                    />
+                  </div>
+                </div>
+                {passwordError && (
+                  <p className="alert alert-error" role="alert">
+                    {passwordError}
+                  </p>
+                )}
+                <div>
+                  <button className="button button-primary" disabled={busy}>
+                    {busy ? "Updating…" : "Change password"}
+                  </button>
+                </div>
+              </form>
+            )}
+          </details>
+          <SettingRow
+            label="Sign out"
+            help="Your copy tasks will continue running."
+          >
+            <button
+              className="button button-secondary"
+              onClick={() => void auth.logout()}
+            >
+              <Icon name="logout" size={17} />
+              Sign out
+            </button>
+          </SettingRow>
+        </section>
       </div>
     </div>
   );

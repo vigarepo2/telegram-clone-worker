@@ -82,7 +82,6 @@ export async function handleCreateSavedTask(
     n: task.total,
     pacing_batch_size: task.pacing_batch_size,
     filter_media_types: task.filter_media_types,
-    filter_extensions: task.filter_extensions,
     filter_min_size_bytes: task.filter_min_size_bytes,
     filter_max_size_bytes: task.filter_max_size_bytes,
   });

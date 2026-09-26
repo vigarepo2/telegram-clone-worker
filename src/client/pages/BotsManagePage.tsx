@@ -7,7 +7,6 @@ import { PageHero } from "../components/PageHero";
 import { BotActivityModal } from "../components/BotActivityModal";
 import { Modal } from "../components/Modal";
 import { Icon } from "../components/Icon";
-import { InfoLabel, InfoTip } from "../components/InfoTip";
 import type { BotSummary, TaskSummary } from "../../shared/rpcTypes";
 export function BotsManagePage() {
   const {
@@ -31,6 +30,7 @@ export function BotsManagePage() {
   const [inspect, setInspect] = useState<BotSummary | null>(null);
   async function save(event: FormEvent) {
     event.preventDefault();
+    if (busy) return;
     setBusy(true);
     setFormError("");
     const result = rename
@@ -52,6 +52,7 @@ export function BotsManagePage() {
     await refetch();
   }
   async function prepareRemove(bot: BotSummary) {
+    if (busy) return;
     setBusy(true);
     const result = await api.get<TaskSummary[]>(`/api/bots/${bot.id}/tasks`);
     setBusy(false);
@@ -62,7 +63,7 @@ export function BotsManagePage() {
     setRemove({ bot, count: result.data.length });
   }
   async function deleteBot() {
-    if (!remove) return;
+    if (!remove || busy) return;
     setBusy(true);
     const result = await api.del(`/api/bots/${remove.bot.id}`);
     setBusy(false);
@@ -77,12 +78,13 @@ export function BotsManagePage() {
   return (
     <div className="content-container">
       <PageHero
-        title="Connected bots"
-        subtitle="The Telegram bots that copy messages for you."
+        title="Bots"
+        subtitle="Connect the bots you use to copy messages."
       >
         <div className="option-help">
           <button
             className="button button-primary"
+            disabled={busy}
             onClick={() => {
               setConnect(true);
               setLabel("");
@@ -93,11 +95,6 @@ export function BotsManagePage() {
             <Icon name="plus" />
             Connect bot
           </button>
-          <InfoTip label="Connect bot">
-            Save a Telegram bot so it can copy messages for you. You need its
-            token from BotFather. This does not start copying until you create a
-            task.
-          </InfoTip>
         </div>
       </PageHero>
       {error && (
@@ -161,21 +158,18 @@ export function BotsManagePage() {
                 <div className="option-help">
                   <button
                     className="button button-secondary button-sm"
+                    disabled={busy}
                     onClick={() => setInspect(bot)}
                   >
                     <Icon name="history" size={16} />
                     Status
                   </button>
-                  <InfoTip label="Bot status">
-                    Check whether Telegram accepts this bot and whether another
-                    service is connected. This check does not send or copy any
-                    messages.
-                  </InfoTip>
                 </div>
                 <div className="option-help">
                   <button
                     className="icon-button"
-                    aria-label={`Rename ${bot.label}`}
+                    aria-label={`Rename ${bot.label || bot.bot_username}`}
+                    disabled={busy}
                     onClick={() => {
                       setRename(bot);
                       setLabel(bot.label);
@@ -184,25 +178,16 @@ export function BotsManagePage() {
                   >
                     <Icon name="edit" />
                   </button>
-                  <InfoTip label="Rename bot">
-                    Change the name shown in this website. The bot’s Telegram
-                    name and username stay the same.
-                  </InfoTip>
                 </div>
                 <div className="option-help">
                   <button
                     className="icon-button"
-                    aria-label={`Remove ${bot.label}`}
+                    aria-label={`Remove ${bot.label || bot.bot_username}`}
                     disabled={busy}
                     onClick={() => void prepareRemove(bot)}
                   >
                     <Icon name="trash" />
                   </button>
-                  <InfoTip label="Remove bot">
-                    Remove this bot from the website and delete all of its tasks
-                    here. Copies already in Telegram remain. You will see the
-                    affected task count before confirming.
-                  </InfoTip>
                 </div>
               </div>
             </article>
@@ -241,11 +226,9 @@ export function BotsManagePage() {
                   in Telegram and use /newbot to get a token.
                 </p>
                 <div className="field">
-                  <InfoLabel htmlFor="bot-token" label="Bot token">
-                    This is the long secret code BotFather gives you for your
-                    bot. Paste the whole code, including the colon. It lets this
-                    website control the bot, so do not share it publicly.
-                  </InfoLabel>
+                  <label className="form-label" htmlFor="bot-token">
+                    Bot token
+                  </label>
                   <input
                     id="bot-token"
                     className="input"
@@ -254,23 +237,22 @@ export function BotsManagePage() {
                     onChange={(e) => setToken(e.target.value)}
                     autoComplete="off"
                     spellCheck={false}
+                    autoCapitalize="none"
+                    aria-describedby="bot-token-help"
                     required
                     disabled={busy}
                   />
-                  <p className="helper">
-                    Your token is stored on your own deployment.
+                  <p className="helper" id="bot-token-help">
+                    Paste the whole token from BotFather. It stays on your
+                    deployment and is not shown after saving.
                   </p>
                 </div>
               </>
             )}
             <div className="field">
-              <InfoLabel
-                htmlFor="bot-name"
-                label={rename ? "Name" : "Name (optional)"}
-              >
-                Choose a short name to recognize this bot here, such as News
-                channel. This does not rename the bot in Telegram.
-              </InfoLabel>
+              <label className="form-label" htmlFor="bot-name">
+                Name {rename ? "" : "(optional)"}
+              </label>
               <input
                 id="bot-name"
                 className="input"
@@ -278,9 +260,14 @@ export function BotsManagePage() {
                 maxLength={120}
                 onChange={(e) => setLabel(e.target.value)}
                 placeholder="For example, News channel"
+                aria-describedby="bot-name-help"
                 required={!!rename}
                 disabled={busy}
               />
+              <p className="helper" id="bot-name-help">
+                A name for this website. Your bot’s Telegram name stays the
+                same.
+              </p>
             </div>
             {formError && (
               <div className="alert alert-error" role="alert">

@@ -1,4 +1,3 @@
-import { normalizeExtensionFilter } from "../../shared/mediaExtensions";
 import { TelegramApiError } from "../../telegram/errors";
 
 export const CHAT_ID = /^(?:-?[1-9]\d{0,15}|@[a-zA-Z][a-zA-Z0-9_]{3,31})$/;
@@ -116,17 +115,6 @@ export function validateTaskInput(
         .some((type) => !MEDIA_TYPES.has(type.trim()))
     )
       return "Choose supported message types.";
-  }
-  if (body.filterExtensions !== undefined && body.filterExtensions !== null) {
-    if (typeof body.filterExtensions !== "string")
-      return "Choose supported file extensions.";
-    try {
-      const normalized = normalizeExtensionFilter(body.filterExtensions);
-      if (normalized && body.scope === "backfill_only")
-        return "File filters apply only to new messages. Enable new-message copying to use them.";
-    } catch {
-      return "Choose supported file extensions.";
-    }
   }
   for (const key of ["filterMinSizeBytes", "filterMaxSizeBytes"]) {
     const size = body[key];

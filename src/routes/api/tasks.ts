@@ -1,4 +1,3 @@
-import { normalizeExtensionFilter } from "../../shared/mediaExtensions";
 import { invalid, positiveInteger, validateTaskInput } from "./validation";
 import { TelegramClient } from "../../telegram/client";
 import { deriveCapabilities } from "../../telegram/capabilities";
@@ -92,7 +91,6 @@ interface CreateTaskBody {
   allowDuplicate?: boolean;
   saveTemplate?: boolean;
   filterMediaTypes?: string | null;
-  filterExtensions?: string | null;
   filterMinSizeBytes?: number | null;
   filterMaxSizeBytes?: number | null;
 }
@@ -299,9 +297,6 @@ export async function handleCreateTask(
       backfill_status: wantsBackfill ? "running" : "not_applicable",
       pacing_batch_size: pacingBatchSize,
       filter_media_types: body.filterMediaTypes ?? null,
-      filter_extensions: body.filterExtensions
-        ? normalizeExtensionFilter(body.filterExtensions)
-        : null,
       filter_min_size_bytes: body.filterMinSizeBytes ?? null,
       filter_max_size_bytes: body.filterMaxSizeBytes ?? null,
     });
@@ -330,9 +325,6 @@ export async function handleCreateTask(
               : null,
           pacing_batch_size: pacingBatchSize,
           filter_media_types: body.filterMediaTypes ?? null,
-          filter_extensions: body.filterExtensions
-            ? normalizeExtensionFilter(body.filterExtensions)
-            : null,
           filter_min_size_bytes: body.filterMinSizeBytes ?? null,
           filter_max_size_bytes: body.filterMaxSizeBytes ?? null,
         });
@@ -368,7 +360,6 @@ interface PatchTaskBody {
   cursor?: number | null;
   resetProgress?: boolean;
   filterMediaTypes?: string | null;
-  filterExtensions?: string | null;
   filterMinSizeBytes?: number | null;
   filterMaxSizeBytes?: number | null;
 }
@@ -496,26 +487,9 @@ export async function handlePatchTask(
       ? body.filterMaxSizeBytes
       : currentTask.filter_max_size_bytes;
 
-  let filterExtensions =
-    body.filterExtensions === undefined
-      ? currentTask.filter_extensions
-      : body.filterExtensions === null
-        ? null
-        : normalizeExtensionFilter(body.filterExtensions);
-  if (
-    targetScope === "backfill_only" &&
-    body.filterExtensions &&
-    filterExtensions
-  ) {
-    return invalid(
-      "File filters apply only to new messages. Enable new-message copying to use them.",
-    );
-  }
-
   // Backfill only scope does not use filters
   if (targetScope === "backfill_only") {
     filterMediaTypes = null;
-    filterExtensions = null;
     filterMinSizeBytes = null;
     filterMaxSizeBytes = null;
   }
@@ -543,7 +517,6 @@ export async function handlePatchTask(
     total,
     reset_progress: body.resetProgress,
     filter_media_types: filterMediaTypes,
-    filter_extensions: filterExtensions,
     filter_min_size_bytes: filterMinSizeBytes,
     filter_max_size_bytes: filterMaxSizeBytes,
   });

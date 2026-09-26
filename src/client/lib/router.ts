@@ -4,6 +4,7 @@ export type Route =
   | { type: "task"; taskId: string }
   | {
       type:
+        | "active"
         | "paused"
         | "completed"
         | "bots"
@@ -23,6 +24,7 @@ function parseHash(): Route {
     };
   if (kind === "task" && value) return { type: "task", taskId: value };
   if (
+    kind === "active" ||
     kind === "paused" ||
     kind === "completed" ||
     kind === "bots" ||

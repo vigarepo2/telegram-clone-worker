@@ -1,7 +1,10 @@
-import { DEFAULT_THEME, isTheme, type ThemeId } from "./themeCatalog";
+export const COLOR_MODES = ["system", "light", "dark"] as const;
+export type ColorMode = (typeof COLOR_MODES)[number];
+export type ResolvedColorMode = Exclude<ColorMode, "system">;
+export const DEFAULT_COLOR_MODE: ColorMode = "system";
 
 export interface WorkspacePreferences {
-  themeId: ThemeId;
+  colorMode: ColorMode;
   density: "comfortable" | "compact";
   textSize: "standard" | "large";
   reduceMotion: boolean;
@@ -11,7 +14,7 @@ export interface WorkspacePreferences {
 }
 
 export const PREFERENCE_KEYS = [
-  "themeId",
+  "colorMode",
   "density",
   "textSize",
   "reduceMotion",
@@ -25,7 +28,7 @@ export type PreferencePatch = Partial<WorkspacePreferences>;
 
 export const DEFAULT_PREFERENCES: Readonly<WorkspacePreferences> =
   Object.freeze({
-    themeId: DEFAULT_THEME,
+    colorMode: DEFAULT_COLOR_MODE,
     density: "comfortable",
     textSize: "standard",
     reduceMotion: false,
@@ -39,8 +42,8 @@ export function isPreferenceValue<K extends PreferenceKey>(
   value: unknown,
 ): value is WorkspacePreferences[K] {
   switch (key) {
-    case "themeId":
-      return typeof value === "string" && isTheme(value);
+    case "colorMode":
+      return value === "system" || value === "light" || value === "dark";
     case "density":
       return value === "comfortable" || value === "compact";
     case "textSize":
@@ -61,7 +64,7 @@ export function isPreferenceValue<K extends PreferenceKey>(
 }
 
 const INVALID_PREFERENCE: Record<PreferenceKey, string> = {
-  themeId: "Choose an available theme.",
+  colorMode: "Choose system, light, or dark appearance.",
   density: "Choose comfortable or compact spacing.",
   textSize: "Choose standard or large text.",
   reduceMotion: "Choose whether to reduce motion.",

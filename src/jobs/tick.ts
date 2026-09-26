@@ -161,9 +161,6 @@ export async function runTick(env: Env): Promise<void> {
                     mediaTypes: task.filter_media_types
                       ?.split(",")
                       .filter(Boolean),
-                    extensions: task.filter_extensions
-                      ?.split(",")
-                      .filter(Boolean),
                     minSizeBytes: task.filter_min_size_bytes,
                     maxSizeBytes: task.filter_max_size_bytes,
                   });

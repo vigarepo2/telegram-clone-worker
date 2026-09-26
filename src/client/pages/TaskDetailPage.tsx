@@ -5,8 +5,6 @@ import { useToast } from "../components/Toast";
 import { Icon } from "../components/Icon";
 import { Modal } from "../components/Modal";
 import { Badge } from "../components/Badge";
-import { InfoLabel, InfoTip } from "../components/InfoTip";
-import { MediaFilterPicker } from "../components/MediaFilterPicker";
 import { navigate } from "../lib/router";
 import { useTasks, getTaskDisplayInfo } from "../lib/useTasksContext";
 import { formatBytes } from "../../shared/messageFilter";
@@ -49,10 +47,13 @@ const stopMessages: Record<ErrorReason, string> = {
     "Telegram could not complete the copy. Check the activity below, then retry.",
 };
 const mediaLabels: Record<string, string> = {
+  text: "Text",
   document: "Documents",
   video: "Videos",
   photo: "Photos",
   audio: "Audio",
+  voice: "Voice messages",
+  animation: "Animations",
 };
 
 function positiveInteger(value: string): number | null {
@@ -110,9 +111,7 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
   const [editCursor, setEditCursor] = useState("");
   const [cursorChanged, setCursorChanged] = useState(false);
   const [resetProgress, setResetProgress] = useState(false);
-  const [enableFilters, setEnableFilters] = useState(false);
   const [filterMediaTypes, setFilterMediaTypes] = useState<string[]>([]);
-  const [filterExtensions, setFilterExtensions] = useState<string[]>([]);
   const [minFileSizeMb, setMinFileSizeMb] = useState("");
   const [maxFileSizeMb, setMaxFileSizeMb] = useState("");
 
@@ -125,22 +124,8 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
     setEditCursor(task.cursor == null ? "" : String(task.cursor));
     setCursorChanged(false);
     setResetProgress(false);
-    setEnableFilters(
-      Boolean(
-        task.filter_media_types ||
-        task.filter_extensions ||
-        task.filter_min_size_bytes != null ||
-        task.filter_max_size_bytes != null,
-      ),
-    );
     setFilterMediaTypes(
       task.filter_media_types
-        ?.split(",")
-        .map((value) => value.trim())
-        .filter(Boolean) ?? [],
-    );
-    setFilterExtensions(
-      task.filter_extensions
         ?.split(",")
         .map((value) => value.trim())
         .filter(Boolean) ?? [],
@@ -184,7 +169,7 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
     if (!task || busy) return;
     setEditError(null);
     const wantsHistory = editScope !== "live";
-    const wantsFilters = editScope !== "backfill_only" && enableFilters;
+    const wantsFilters = editScope !== "backfill_only";
     const startId = wantsHistory ? positiveInteger(editStartId) : null;
     const endId = wantsHistory ? positiveInteger(editEndId) : null;
     const cursor =
@@ -248,10 +233,6 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
         filterMediaTypes:
           wantsFilters && filterMediaTypes.length
             ? filterMediaTypes.join(",")
-            : null,
-        filterExtensions:
-          wantsFilters && filterExtensions.length
-            ? filterExtensions.join(",")
             : null,
         filterMinSizeBytes: minBytes,
         filterMaxSizeBytes: maxBytes,
@@ -372,7 +353,6 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
           : "Paused";
   const hasFilters = Boolean(
     task.filter_media_types ||
-    task.filter_extensions ||
     task.filter_min_size_bytes != null ||
     task.filter_max_size_bytes != null,
   );
@@ -664,7 +644,7 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
       </section>
 
       <details className="card disclosure">
-        <summary>Task details and troubleshooting</summary>
+        <summary>More details</summary>
         <div className="card-body stack">
           <dl className="detail-list">
             <div>
@@ -713,12 +693,6 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
                             (type) => mediaLabels[type.trim()] || type.trim(),
                           )
                           .join(", ") || "All types",
-                        task.filter_extensions
-                          ? `Formats: ${task.filter_extensions
-                              .split(",")
-                              .map((extension) => `.${extension.trim()}`)
-                              .join(", ")}`
-                          : "Any format",
                         task.filter_min_size_bytes != null
                           ? `Minimum ${formatBytes(task.filter_min_size_bytes)}`
                           : "",
@@ -753,15 +727,9 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
               ID, then tries to delete it. Members may see a notification.
             </p>
             <div className="field">
-              <InfoLabel
-                htmlFor="test-message-id"
-                label="Message ID (optional)"
-              >
-                Enter the final number in a source message link to copy that
-                message. Leaving this empty uses a temporary source message to
-                find the latest ID, which may notify members. The test sends one
-                real copy to the destination.
-              </InfoLabel>
+              <label className="form-label" htmlFor="test-message-id">
+                Message ID (optional)
+              </label>
               <input
                 id="test-message-id"
                 className="input"
@@ -863,11 +831,9 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
               </p>
             )}
             <div className="field">
-              <InfoLabel htmlFor="edit-task-name" label="Task name">
-                A name to help you find this task. It does not rename either
-                Telegram chat. Leave it empty to use the source and destination
-                names.
-              </InfoLabel>
+              <label className="form-label" htmlFor="edit-task-name">
+                Task name
+              </label>
               <input
                 id="edit-task-name"
                 className="input"
@@ -875,22 +841,21 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
                 value={editLabel}
                 onChange={(event) => setEditLabel(event.target.value)}
                 placeholder={displayInfo.routeText}
+                disabled={busy}
               />
             </div>
             <div className="field">
-              <InfoLabel htmlFor="edit-task-scope" label="Messages to copy">
-                New messages keeps checking for new posts. Existing messages
-                copies the message range once. Existing and new messages copies
-                the range first, then continues with new posts. Filters apply
-                only to new messages.
-              </InfoLabel>
+              <label className="form-label" htmlFor="edit-task-scope">
+                Messages to copy
+              </label>
               <select
                 id="edit-task-scope"
-                className="select"
+                className="input"
                 value={editScope}
                 onChange={(event) =>
                   setEditScope(event.target.value as TaskScope)
                 }
+                disabled={busy}
               >
                 <option value="live">New messages</option>
                 <option value="live_and_backfill">
@@ -900,14 +865,12 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
               </select>
             </div>
             {editScope !== "live" && (
-              <div className="stack">
+              <>
                 <div className="form-grid">
                   <div className="field">
-                    <InfoLabel htmlFor="edit-first-id" label="First message ID">
-                      The first source message in the range, including this
-                      message. Open a Telegram message link and use its final
-                      number.
-                    </InfoLabel>
+                    <label className="form-label" htmlFor="edit-first-id">
+                      First message ID
+                    </label>
                     <input
                       id="edit-first-id"
                       className="input"
@@ -915,14 +878,13 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
                       value={editStartId}
                       onChange={(event) => setEditStartId(event.target.value)}
                       required
+                      disabled={busy}
                     />
                   </div>
                   <div className="field">
-                    <InfoLabel htmlFor="edit-last-id" label="Last message ID">
-                      The last source message to include. This must be the same
-                      as or greater than the first ID. Missing or deleted
-                      messages are skipped.
-                    </InfoLabel>
+                    <label className="form-label" htmlFor="edit-last-id">
+                      Last message ID
+                    </label>
                     <input
                       id="edit-last-id"
                       className="input"
@@ -930,203 +892,156 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
                       value={editEndId}
                       onChange={(event) => setEditEndId(event.target.value)}
                       required
+                      disabled={busy}
                     />
                   </div>
                 </div>
                 <p className="helper">
-                  The message ID is the final number in a Telegram message link.
+                  The message ID is the last number in a Telegram message link.
                 </p>
-                <details className="disclosure">
-                  <summary>Change copy progress</summary>
+              </>
+            )}
+            <details className="advanced-section">
+              <summary>
+                More options
+                {editScope !== "backfill_only" &&
+                (filterMediaTypes.length ||
+                  minFileSizeMb !== "" ||
+                  maxFileSizeMb !== "")
+                  ? " · filters on"
+                  : ""}
+              </summary>
+              <div className="stack">
+                {editScope !== "backfill_only" && (
+                  <>
+                    <div>
+                      <h3 className="card-title">Filter new messages</h3>
+                      <p className="helper">
+                        Leave every type unchecked and sizes empty to copy all
+                        available new messages. Existing history is copied
+                        without these filters.
+                      </p>
+                    </div>
+                    <fieldset className="checkbox-group">
+                      <legend className="form-label">Message types</legend>
+                      {Object.entries(mediaLabels).map(([value, label]) => (
+                        <label className="checkbox-label" key={value}>
+                          <input
+                            type="checkbox"
+                            checked={filterMediaTypes.includes(value)}
+                            disabled={busy}
+                            onChange={(event) =>
+                              setFilterMediaTypes((current) =>
+                                event.target.checked
+                                  ? [...current, value]
+                                  : current.filter((type) => type !== value),
+                              )
+                            }
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </fieldset>
+                    <p className="helper">
+                      Telegram treats a video sent as a file as a Document.
+                    </p>
+                    <div className="form-grid">
+                      <div className="field">
+                        <label className="form-label" htmlFor="edit-min-size">
+                          Minimum size (MB)
+                        </label>
+                        <input
+                          id="edit-min-size"
+                          className="input"
+                          inputMode="decimal"
+                          value={minFileSizeMb}
+                          onChange={(event) =>
+                            setMinFileSizeMb(event.target.value)
+                          }
+                          placeholder="No minimum"
+                          disabled={busy}
+                        />
+                      </div>
+                      <div className="field">
+                        <label className="form-label" htmlFor="edit-max-size">
+                          Maximum size (MB)
+                        </label>
+                        <input
+                          id="edit-max-size"
+                          className="input"
+                          inputMode="decimal"
+                          value={maxFileSizeMb}
+                          onChange={(event) =>
+                            setMaxFileSizeMb(event.target.value)
+                          }
+                          placeholder="No maximum"
+                          disabled={busy}
+                        />
+                      </div>
+                    </div>
+                    <p className="helper">
+                      Messages without a reported file size are unaffected by
+                      size limits.
+                    </p>
+                    {!!(
+                      filterMediaTypes.length ||
+                      minFileSizeMb !== "" ||
+                      maxFileSizeMb !== ""
+                    ) && (
+                      <button
+                        type="button"
+                        className="button button-secondary align-start"
+                        disabled={busy}
+                        onClick={() => {
+                          setFilterMediaTypes([]);
+                          setMinFileSizeMb("");
+                          setMaxFileSizeMb("");
+                        }}
+                      >
+                        Clear filters
+                      </button>
+                    )}
+                  </>
+                )}
+                {editScope !== "live" && (
                   <div className="stack">
+                    <h3 className="card-title">Copy progress</h3>
                     <div className="field">
-                      <InfoLabel htmlFor="edit-next-id" label="Next message ID">
-                        Where copying will continue. Moving this back can make
-                        duplicate copies; moving it forward skips part of the
-                        range. Keep the current value unchanged or leave it
-                        empty to keep the latest saved position.
-                      </InfoLabel>
+                      <label className="form-label" htmlFor="edit-next-id">
+                        Next message ID
+                      </label>
                       <input
                         id="edit-next-id"
                         className="input"
                         inputMode="numeric"
-                        disabled={resetProgress}
+                        disabled={resetProgress || busy}
                         value={resetProgress ? editStartId : editCursor}
                         onChange={(event) => {
-                          setCursorChanged(true);
                           setEditCursor(event.target.value);
+                          setCursorChanged(true);
                         }}
                       />
                     </div>
-                    <div className="row wrap">
-                      <label className="checkbox-label">
-                        <input
-                          type="checkbox"
-                          checked={resetProgress}
-                          disabled={busy}
-                          onChange={(event) =>
-                            setResetProgress(event.target.checked)
-                          }
-                        />
-                        Restart from the first message
-                      </label>
-                      <InfoTip label="Restart from the first message">
-                        Resets the copied and skipped counts when you save, then
-                        copies the entire range again. Previously copied
-                        messages stay in the destination, so restarting may
-                        create duplicates.
-                      </InfoTip>
-                    </div>
-                    <p className="helper">
-                      Restarting clears progress and can copy messages again.
-                      Messages already in the destination stay there.
-                    </p>
-                  </div>
-                </details>
-              </div>
-            )}
-            {editScope !== "backfill_only" && (
-              <details className="disclosure" open={enableFilters || undefined}>
-                <summary>Filter new messages</summary>
-                <div className="stack">
-                  <p className="helper">
-                    These filters apply to new messages only. Existing messages
-                    are copied without filters.
-                  </p>
-                  <div className="row wrap">
                     <label className="checkbox-label">
                       <input
                         type="checkbox"
-                        checked={enableFilters}
+                        checked={resetProgress}
                         disabled={busy}
                         onChange={(event) =>
-                          setEnableFilters(event.target.checked)
+                          setResetProgress(event.target.checked)
                         }
                       />
-                      Use filters
+                      Restart from the first message
                     </label>
-                    <InfoTip label="Use filters">
-                      Choose which new messages to copy. A message must match
-                      every restriction you set. Turn this off and save to
-                      remove all type, format, and size restrictions. Existing
-                      messages are always unfiltered.
-                    </InfoTip>
+                    <p className="helper">
+                      Restarting clears the progress counters and can copy
+                      messages again. Messages already in the destination stay
+                      there.
+                    </p>
                   </div>
-                  {enableFilters && (
-                    <>
-                      <MediaFilterPicker
-                        value={filterExtensions}
-                        onChange={setFilterExtensions}
-                        disabled={busy}
-                      />
-                      {filterExtensions.length > 0 &&
-                        filterMediaTypes.length > 0 && (
-                          <p className="helper">
-                            Both filters must match. For example, an .mp4 sent
-                            as a document is excluded if only Videos is checked.
-                            Leave message types unchecked to match by format
-                            alone.
-                          </p>
-                        )}
-                      <details className="disclosure">
-                        <summary>
-                          Message type and size filters
-                          {(filterMediaTypes.length > 0 ||
-                            minFileSizeMb !== "" ||
-                            maxFileSizeMb !== "") &&
-                            " (active)"}
-                        </summary>
-                        <div className="stack">
-                          <fieldset className="checkbox-group">
-                            <legend className="form-label">
-                              <span className="info-label">
-                                Message types
-                                <InfoTip label="Message types">
-                                  These are Telegram message types, separate
-                                  from file formats. For example, an MP4 sent as
-                                  a file is a Document, while an MP4 sent as a
-                                  video is a Video. Leave all types unchecked to
-                                  allow every type. Any format and size choices
-                                  still apply.
-                                </InfoTip>
-                              </span>
-                            </legend>
-                            {Object.entries(mediaLabels).map(
-                              ([value, label]) => (
-                                <label className="checkbox-label" key={value}>
-                                  <input
-                                    type="checkbox"
-                                    checked={filterMediaTypes.includes(value)}
-                                    disabled={busy}
-                                    onChange={(event) =>
-                                      setFilterMediaTypes((current) =>
-                                        event.target.checked
-                                          ? [...current, value]
-                                          : current.filter(
-                                              (type) => type !== value,
-                                            ),
-                                      )
-                                    }
-                                  />
-                                  {label}
-                                </label>
-                              ),
-                            )}
-                          </fieldset>
-                          <p className="helper">
-                            Leave all types unchecked to allow every type.
-                          </p>
-                          <div className="form-grid">
-                            <div className="field">
-                              <InfoLabel
-                                htmlFor="edit-min-size"
-                                label="Minimum size (MB)"
-                              >
-                                Skip new files smaller than this size. Leave it
-                                empty for no minimum. A message must match the
-                                type, format, and size filters you set. Existing
-                                messages are unaffected.
-                              </InfoLabel>
-                              <input
-                                id="edit-min-size"
-                                className="input"
-                                inputMode="decimal"
-                                value={minFileSizeMb}
-                                onChange={(event) =>
-                                  setMinFileSizeMb(event.target.value)
-                                }
-                                placeholder="No minimum"
-                              />
-                            </div>
-                            <div className="field">
-                              <InfoLabel
-                                htmlFor="edit-max-size"
-                                label="Maximum size (MB)"
-                              >
-                                Skip new files larger than this size. Leave it
-                                empty for no maximum. This must be at least the
-                                minimum size if you set one. Existing messages
-                                are unaffected.
-                              </InfoLabel>
-                              <input
-                                id="edit-max-size"
-                                className="input"
-                                inputMode="decimal"
-                                value={maxFileSizeMb}
-                                onChange={(event) =>
-                                  setMaxFileSizeMb(event.target.value)
-                                }
-                                placeholder="No maximum"
-                              />
-                            </div>
-                          </div>
-                        </div>
-                      </details>
-                    </>
-                  )}
-                </div>
-              </details>
-            )}
+                )}
+              </div>
+            </details>
           </form>
         </Modal>
       )}

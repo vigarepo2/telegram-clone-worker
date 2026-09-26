@@ -1,10 +1,7 @@
-import { useState } from "react";
 import { ToastProvider } from "./components/Toast";
-import { LayoutContext } from "./components/LayoutContext";
 import { TasksProvider } from "./lib/useTasksContext";
 import { AuthProvider, useAuth } from "./lib/useAuth";
-import { ThemeProvider, usePreferences, useTheme } from "./lib/themes";
-import { THEMES } from "../shared/themeCatalog";
+import { PreferencesProvider, usePreferences } from "./lib/preferences";
 import { AuthPage } from "./pages/AuthPage";
 import { AppNav } from "./components/AppNav";
 import { AppFooter } from "./components/AppFooter";
@@ -15,7 +12,7 @@ import { BotsManagePage } from "./pages/BotsManagePage";
 import { SavedTasksPage } from "./pages/SavedTasksPage";
 import { CompletedTasksPage } from "./pages/CompletedTasksPage";
 import { PausedTasksPage } from "./pages/PausedTasksPage";
-import { EmptyStatePage } from "./pages/EmptyStatePage";
+import { TasksPage } from "./pages/TasksPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { HelpPage } from "./pages/HelpPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
@@ -37,21 +34,21 @@ function Page() {
   if (route.type === "saved-tasks") return <SavedTasksPage />;
   if (route.type === "settings") return <SettingsPage />;
   if (route.type === "help") return <HelpPage />;
-  return <EmptyStatePage />;
+  return <TasksPage view={route.type === "active" ? "active" : "all"} />;
 }
 function MainShell() {
   const auth = useAuth();
-  const { theme } = useTheme();
   const {
+    resolvedMode,
+    setColorMode,
     loading: preferencesLoading,
     error: preferencesError,
     retry: retryPreferences,
   } = usePreferences();
-  const recipe = THEMES.find((item) => item.id === theme) ?? THEMES[0];
-  const [drawerOpen, setDrawerOpen] = useState(false);
   const route = useHashRoute();
   const titles: Record<string, string> = {
     empty: "Tasks",
+    active: "Tasks",
     wizard: "New task",
     task: "Task details",
     paused: "Paused & attention",
@@ -65,7 +62,7 @@ function MainShell() {
     return (
       <main className="loading-screen" role="status">
         <span className="brand-mark">
-          <Icon name="copy" size={26} />
+          <Icon name="logo" size={26} />
         </span>
         <p>Opening your workspace…</p>
       </main>
@@ -89,90 +86,88 @@ function MainShell() {
     return (
       <main className="loading-screen" role="status">
         <span className="brand-mark">
-          <Icon name="copy" size={26} />
+          <Icon name="logo" size={26} />
         </span>
         <p>Loading your saved settings…</p>
       </main>
     );
   return (
     <TasksProvider>
-      <LayoutContext.Provider
-        value={{
-          sidebarCollapsed: false,
-          drawerOpen,
-          setDrawerOpen,
-          toggleSidebar: () => setDrawerOpen(!drawerOpen),
-        }}
-      >
-        <div className={`app-shell shell-${recipe.navigation}`}>
-          <a
-            href="#main-content"
-            className="skip-link"
-            onClick={(event) => {
-              event.preventDefault();
-              document.getElementById("main-content")?.focus();
-            }}
-          >
-            Skip to content
-          </a>
-          <AppNav />
-          <div className="app-main" inert={drawerOpen ? true : undefined}>
-            <header className="app-header">
-              <div className="header-workspace">
+      <div className="app-shell">
+        <a
+          href="#main-content"
+          className="skip-link"
+          onClick={(event) => {
+            event.preventDefault();
+            document.getElementById("main-content")?.focus();
+          }}
+        >
+          Skip to content
+        </a>
+        <AppNav />
+        <div className="app-main">
+          <header className="app-header">
+            <a
+              href="#"
+              className="mobile-brand"
+              aria-label="Telegram Copy home"
+            >
+              <span className="brand-mark">
+                <Icon name="logo" size={24} />
+              </span>
+              <strong>Telegram Copy</strong>
+            </a>
+            <span className="workspace-title">{titles[route.type]}</span>
+            <div className="header-actions">
+              <button
+                className="icon-button mode-toggle"
+                type="button"
+                aria-label={
+                  resolvedMode === "dark" ? "Use light mode" : "Use dark mode"
+                }
+                title={
+                  resolvedMode === "dark" ? "Use light mode" : "Use dark mode"
+                }
+                onClick={() =>
+                  void setColorMode(resolvedMode === "dark" ? "light" : "dark")
+                }
+              >
+                <Icon
+                  name={resolvedMode === "dark" ? "sun" : "moon"}
+                  size={19}
+                />
+              </button>
+              <a className="header-help" href="#help">
+                <Icon name="help" size={18} />
+                <span>Help</span>
+              </a>
+            </div>
+          </header>
+          <main id="main-content" className="app-content" tabIndex={-1}>
+            {auth.error && (
+              <div className="alert alert-error" role="alert">
+                {auth.error}
+              </div>
+            )}
+            {preferencesError && route.type !== "settings" && (
+              <div className="alert alert-error" role="alert">
+                <Icon name="alert" />
+                <span>{preferencesError}</span>
                 <button
-                  className="icon-button mobile-menu"
-                  aria-label="Open navigation"
-                  aria-expanded={drawerOpen}
-                  onClick={() => setDrawerOpen(true)}
+                  className="button button-secondary button-sm"
+                  onClick={() => void retryPreferences()}
                 >
-                  <Icon name="menu" />
+                  Retry settings
                 </button>
-                {recipe.navigation === "bottom" && (
-                  <a href="#" className="header-brand">
-                    <span className="brand-mark">
-                      <Icon name="copy" size={21} />
-                    </span>
-                    <strong>Telegram Copy</strong>
-                  </a>
-                )}
-                <span className="breadcrumb">
-                  <span>Workspace</span> <Icon name="chevron-right" size={14} />
-                  <strong>{titles[route.type]}</strong>
-                </span>
               </div>
-              <div className="header-actions">
-                <a className="header-help" href="#help">
-                  <Icon name="help" size={18} />
-                  <span>Help</span>
-                </a>
-              </div>
-            </header>
-            <main id="main-content" className="app-content" tabIndex={-1}>
-              {auth.error && (
-                <div className="alert alert-error" role="alert">
-                  {auth.error}
-                </div>
-              )}
-              {preferencesError && route.type !== "settings" && (
-                <div className="alert alert-error" role="alert">
-                  <Icon name="alert" />
-                  <span>{preferencesError}</span>
-                  <button
-                    className="button button-secondary button-sm"
-                    onClick={() => void retryPreferences()}
-                  >
-                    Retry settings
-                  </button>
-                </div>
-              )}
-              <ErrorBoundary key={route.type}>
-                <Page />
-              </ErrorBoundary>
-            </main>
-            <AppFooter />
-          </div>
+            )}
+            <ErrorBoundary key={route.type}>
+              <Page />
+            </ErrorBoundary>
+          </main>
+          <AppFooter />
         </div>
-      </LayoutContext.Provider>
+      </div>
     </TasksProvider>
   );
 }
@@ -180,9 +175,9 @@ export default function App() {
   return (
     <ToastProvider>
       <AuthProvider>
-        <ThemeProvider>
+        <PreferencesProvider>
           <MainShell />
-        </ThemeProvider>
+        </PreferencesProvider>
       </AuthProvider>
     </ToastProvider>
   );

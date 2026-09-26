@@ -4,6 +4,7 @@ import { listAllTasks } from "./api";
 import { usePolling } from "./usePolling";
 export function isTaskCompleted(t: TaskSummary) {
   return (
+    t.scope === "backfill_only" &&
     !t.stop_reason &&
     !t.live_enabled &&
     (t.backfill_status === "cancelled" || t.backfill_status === "complete")
