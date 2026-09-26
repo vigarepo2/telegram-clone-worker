@@ -3,7 +3,6 @@ import type {
   BotSummary,
   ErrorReason,
   SavedTaskSummary,
-  SavedTaskWithToken,
   SourceTaskHistory,
   TaskDetail,
   TaskScope,
@@ -22,51 +21,95 @@ export interface BotRow extends BotSummary {
 
 export async function insertBot(
   db: D1Database,
-  row: { id: string; token: string; bot_id: number; bot_username: string; label: string; webhook_secret: string },
+  row: {
+    id: string;
+    token: string;
+    bot_id: number;
+    bot_username: string;
+    label: string;
+    webhook_secret: string;
+  },
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO bots (id, token, bot_id, bot_username, label, webhook_secret, last_update_id) VALUES (?, ?, ?, ?, ?, ?, 0)`,
+      `INSERT INTO bots (id, token, bot_id, bot_username, label, webhook_secret, last_update_id) SELECT ?, ?, ?, ?, ?, ?, 0 WHERE NOT EXISTS (SELECT 1 FROM bots WHERE bot_id = ?)`,
     )
-    .bind(row.id, row.token, row.bot_id, row.bot_username, row.label, row.webhook_secret)
+    .bind(
+      row.id,
+      row.token,
+      row.bot_id,
+      row.bot_username,
+      row.label,
+      row.webhook_secret,
+      row.bot_id,
+    )
     .run();
 }
 
 export async function listBotsSummary(db: D1Database): Promise<BotSummary[]> {
   const { results } = await db
-    .prepare(`SELECT id, bot_id, bot_username, label, created_at FROM bots ORDER BY created_at DESC`)
+    .prepare(
+      `SELECT id, bot_id, bot_username, label, created_at FROM bots ORDER BY created_at DESC`,
+    )
     .all<BotSummary>();
   return results;
 }
 
 export async function listBotsWithSecrets(db: D1Database): Promise<BotRow[]> {
   const { results } = await db
-    .prepare(`SELECT id, token, bot_id, bot_username, label, webhook_secret, last_update_id, created_at FROM bots ORDER BY created_at DESC`)
+    .prepare(
+      `SELECT id, token, bot_id, bot_username, label, webhook_secret, last_update_id, created_at FROM bots ORDER BY created_at DESC`,
+    )
     .all<BotRow>();
   return results;
 }
 
-export async function updateBotLastUpdateId(db: D1Database, botId: string, lastUpdateId: number): Promise<void> {
-  await db.prepare(`UPDATE bots SET last_update_id = ? WHERE id = ?`).bind(lastUpdateId, botId).run();
+export async function updateBotLastUpdateId(
+  db: D1Database,
+  botId: string,
+  lastUpdateId: number,
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE bots SET last_update_id = MAX(last_update_id, ?) WHERE id = ?`,
+    )
+    .bind(lastUpdateId, botId)
+    .run();
 }
 
-export async function countActiveLiveTasksForBot(db: D1Database, botId: string, excludeTaskId?: string): Promise<number> {
-  let query = "SELECT COUNT(*) as c FROM tasks WHERE bot_id = ? AND live_enabled = 1";
+export async function countActiveLiveTasksForBot(
+  db: D1Database,
+  botId: string,
+  excludeTaskId?: string,
+): Promise<number> {
+  let query =
+    "SELECT COUNT(*) as c FROM tasks WHERE bot_id = ? AND live_enabled = 1";
   if (excludeTaskId) query += " AND id != ?";
-  const stmt = excludeTaskId ? db.prepare(query).bind(botId, excludeTaskId) : db.prepare(query).bind(botId);
+  const stmt = excludeTaskId
+    ? db.prepare(query).bind(botId, excludeTaskId)
+    : db.prepare(query).bind(botId);
   const row = await stmt.first<{ c: number }>();
   return row?.c ?? 0;
 }
 
-export async function getBotWithSecrets(db: D1Database, id: string): Promise<BotRow | null> {
+export async function getBotWithSecrets(
+  db: D1Database,
+  id: string,
+): Promise<BotRow | null> {
   const row = await db
-    .prepare(`SELECT id, token, bot_id, bot_username, label, webhook_secret, last_update_id, created_at FROM bots WHERE id = ?`)
+    .prepare(
+      `SELECT id, token, bot_id, bot_username, label, webhook_secret, last_update_id, created_at FROM bots WHERE id = ?`,
+    )
     .bind(id)
     .first<BotRow>();
   return row ?? null;
 }
 
-export async function findBotByWebhookSecret(db: D1Database, id: string, secret: string): Promise<BotRow | null> {
+export async function findBotByWebhookSecret(
+  db: D1Database,
+  id: string,
+  secret: string,
+): Promise<BotRow | null> {
   const row = await db
     .prepare(
       `SELECT id, token, bot_id, bot_username, label, webhook_secret, created_at FROM bots WHERE id = ? AND webhook_secret = ?`,
@@ -99,8 +142,15 @@ export async function findBotByTokenOrBotId(
   return row ?? null;
 }
 
-export async function updateBotLabel(db: D1Database, id: string, label: string): Promise<void> {
-  await db.prepare(`UPDATE bots SET label = ? WHERE id = ?`).bind(label, id).run();
+export async function updateBotLabel(
+  db: D1Database,
+  id: string,
+  label: string,
+): Promise<void> {
+  await db
+    .prepare(`UPDATE bots SET label = ? WHERE id = ?`)
+    .bind(label, id)
+    .run();
 }
 
 export async function deleteBot(db: D1Database, id: string): Promise<void> {
@@ -128,13 +178,14 @@ function rowToTask(row: Record<string, unknown>): TaskSummary {
     total: (row.total as number) ?? null,
     processed: row.processed as number,
     failed: row.failed as number,
-    live_processed: ((row.live_processed as number) ?? 0),
-    live_failed: ((row.live_failed as number) ?? 0),
-    live_skipped: ((row.live_skipped as number) ?? 0),
+    live_processed: (row.live_processed as number) ?? 0,
+    live_failed: (row.live_failed as number) ?? 0,
+    live_skipped: (row.live_skipped as number) ?? 0,
     filter_media_types: (row.filter_media_types as string) ?? null,
     filter_min_size_bytes: (row.filter_min_size_bytes as number) ?? null,
     filter_max_size_bytes: (row.filter_max_size_bytes as number) ?? null,
-    pending_count: row.pending_count != null ? Number(row.pending_count) : undefined,
+    pending_count:
+      row.pending_count != null ? Number(row.pending_count) : undefined,
     backfill_status: row.backfill_status as BackfillStatus,
     pacing_batch_size: row.pacing_batch_size as number,
     stop_reason: (row.stop_reason as ErrorReason) ?? null,
@@ -167,13 +218,19 @@ export interface NewTask {
 }
 
 export async function insertTask(db: D1Database, t: NewTask): Promise<void> {
+  const columns = await db
+    .prepare("PRAGMA table_info(tasks)")
+    .all<{ name: string }>();
+  const legacyMethod = columns.results.some(
+    (column) => column.name === "method",
+  );
   await db
     .prepare(
       `INSERT INTO tasks (
-        id, bot_id, label, source_chat_id, source_chat_title, dest_chat_id, dest_chat_title,
+        ${legacyMethod ? "method," : ""} id, bot_id, label, source_chat_id, source_chat_title, dest_chat_id, dest_chat_title,
         scope, live_enabled, backfill_mode, start_id, end_id, cursor, total, backfill_status, pacing_batch_size,
         filter_media_types, filter_min_size_bytes, filter_max_size_bytes
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      ) VALUES (${legacyMethod ? "'copy'," : ""}?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .bind(
       t.id,
@@ -199,7 +256,10 @@ export async function insertTask(db: D1Database, t: NewTask): Promise<void> {
     .run();
 }
 
-export async function listTasksByBot(db: D1Database, botId: string): Promise<TaskSummary[]> {
+export async function listTasksByBot(
+  db: D1Database,
+  botId: string,
+): Promise<TaskSummary[]> {
   const { results } = await db
     .prepare(`SELECT * FROM tasks WHERE bot_id = ? ORDER BY created_at DESC`)
     .bind(botId)
@@ -207,20 +267,31 @@ export async function listTasksByBot(db: D1Database, botId: string): Promise<Tas
   return results.map(rowToTask);
 }
 
-export async function listAllTasksSummary(db: D1Database): Promise<TaskSummary[]> {
+export async function listAllTasksSummary(
+  db: D1Database,
+): Promise<TaskSummary[]> {
   const { results } = await db
     .prepare(`SELECT * FROM tasks ORDER BY created_at DESC`)
     .all();
   return results.map(rowToTask);
 }
 
-export async function getTask(db: D1Database, id: string): Promise<TaskSummary | null> {
-  const row = await db.prepare(`SELECT * FROM tasks WHERE id = ?`).bind(id).first();
+export async function getTask(
+  db: D1Database,
+  id: string,
+): Promise<TaskSummary | null> {
+  const row = await db
+    .prepare(`SELECT * FROM tasks WHERE id = ?`)
+    .bind(id)
+    .first();
   return row ? rowToTask(row) : null;
 }
 
 /** Single-query joined lookup for task detail view — reduces D1 reads by 50% */
-export async function getTaskWithBot(db: D1Database, id: string): Promise<TaskDetail | null> {
+export async function getTaskWithBot(
+  db: D1Database,
+  id: string,
+): Promise<TaskDetail | null> {
   const row = await db
     .prepare(
       `SELECT tasks.*,
@@ -240,7 +311,10 @@ export async function getTaskWithBot(db: D1Database, id: string): Promise<TaskDe
 }
 
 /** Looks up past tasks for a source chat, returning what was done and the latest copied message id */
-export async function listTasksForSourceChat(db: D1Database, chatIds: string[]): Promise<SourceTaskHistory[]> {
+export async function listTasksForSourceChat(
+  db: D1Database,
+  chatIds: string[],
+): Promise<SourceTaskHistory[]> {
   if (chatIds.length === 0) return [];
   const placeholders = chatIds.map(() => "?").join(", ");
   const { results } = await db
@@ -260,20 +334,30 @@ export async function listTasksForSourceChat(db: D1Database, chatIds: string[]):
 
   return results.map((row) => {
     const task = rowToTask(row);
-    const resolvedLastId = (task.cursor != null && task.cursor > 1 ? task.cursor - 1 : null) ?? task.end_id ?? null;
+    const resolvedLastId =
+      (task.cursor != null && task.cursor > 1 ? task.cursor - 1 : null) ??
+      task.end_id ??
+      null;
     return {
       ...task,
       bot_username: (row.bot_username as string) ?? "unknown",
       bot_label: (row.bot_label as string) ?? "Bot",
       last_copied_message_id: resolvedLastId,
-      last_activity_at: row.last_activity_at != null ? Number(row.last_activity_at) : null,
+      last_activity_at:
+        row.last_activity_at != null ? Number(row.last_activity_at) : null,
     };
   });
 }
 
 /** Atomic increment of processed counter for live-forwarded messages */
-export async function incrementTaskProcessed(db: D1Database, taskId: string): Promise<void> {
-  await db.prepare(`UPDATE tasks SET processed = processed + 1 WHERE id = ?`).bind(taskId).run();
+export async function incrementTaskProcessed(
+  db: D1Database,
+  taskId: string,
+): Promise<void> {
+  await db
+    .prepare(`UPDATE tasks SET processed = processed + 1 WHERE id = ?`)
+    .bind(taskId)
+    .run();
 }
 
 export async function findDuplicateTask(
@@ -283,13 +367,19 @@ export async function findDuplicateTask(
   destChatId: string,
 ): Promise<TaskSummary | null> {
   const row = await db
-    .prepare(`SELECT * FROM tasks WHERE bot_id = ? AND source_chat_id = ? AND dest_chat_id = ?`)
+    .prepare(
+      `SELECT * FROM tasks WHERE bot_id = ? AND source_chat_id = ? AND dest_chat_id = ?`,
+    )
     .bind(botId, sourceChatId, destChatId)
     .first();
   return row ? rowToTask(row) : null;
 }
 
-export async function findLiveTasksForChat(db: D1Database, botId: string, sourceChatId: string): Promise<TaskSummary[]> {
+export async function findLiveTasksForChat(
+  db: D1Database,
+  botId: string,
+  sourceChatId: string,
+): Promise<TaskSummary[]> {
   const { results } = await db
     .prepare(
       `SELECT * FROM tasks WHERE bot_id = ? AND source_chat_id = ? AND live_enabled = 1
@@ -300,7 +390,9 @@ export async function findLiveTasksForChat(db: D1Database, botId: string, source
   return results.map(rowToTask);
 }
 
-export async function listRunningBackfillTasks(db: D1Database): Promise<TaskSummary[]> {
+export async function listRunningBackfillTasks(
+  db: D1Database,
+): Promise<TaskSummary[]> {
   const { results } = await db
     .prepare(
       `SELECT * FROM tasks WHERE backfill_status = 'running'
@@ -311,7 +403,9 @@ export async function listRunningBackfillTasks(db: D1Database): Promise<TaskSumm
   return results.map(rowToTask);
 }
 
-export async function listActiveSyncTasks(db: D1Database): Promise<TaskSummary[]> {
+export async function listActiveSyncTasks(
+  db: D1Database,
+): Promise<TaskSummary[]> {
   const { results } = await db
     .prepare(
       `SELECT * FROM tasks 
@@ -338,16 +432,24 @@ export async function updateTaskStatus(
   if (patch.backfill_status !== undefined) {
     sets.push("backfill_status = ?");
     binds.push(patch.backfill_status);
-    if (patch.backfill_status === "cancelled") sets.push("stopped_at = unixepoch()");
+    if (patch.backfill_status === "cancelled")
+      sets.push("stopped_at = unixepoch()");
   }
   // Resuming a task clears any prior terminal marker so the badge doesn't
   // keep showing "Stopped"/a stale timestamp after it's active again.
-  if (patch.live_enabled === true || patch.backfill_status === "running" || patch.backfill_status === "paused") {
+  if (
+    patch.live_enabled === true ||
+    patch.backfill_status === "running" ||
+    patch.backfill_status === "paused"
+  ) {
     sets.push("stop_reason = NULL", "stopped_at = NULL");
   }
   if (sets.length === 0) return;
   binds.push(id);
-  await db.prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
+  await db
+    .prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`)
+    .bind(...binds)
+    .run();
 }
 
 export interface UpdateTaskConfig {
@@ -394,7 +496,8 @@ export async function updateTaskConfig(
   if (config.backfill_status !== undefined) {
     sets.push("backfill_status = ?");
     binds.push(config.backfill_status);
-    if (config.backfill_status === "cancelled") sets.push("stopped_at = unixepoch()");
+    if (config.backfill_status === "cancelled")
+      sets.push("stopped_at = unixepoch()");
   }
   if (config.start_id !== undefined) {
     sets.push("start_id = ?");
@@ -429,23 +532,36 @@ export async function updateTaskConfig(
   }
 
   // Clear terminal stop reason if task is set to active
-  if (config.live_enabled === true || config.backfill_status === "running" || config.backfill_status === "paused") {
+  if (
+    config.live_enabled === true ||
+    config.backfill_status === "running" ||
+    config.backfill_status === "paused"
+  ) {
     sets.push("stop_reason = NULL", "stopped_at = NULL");
   }
 
   if (sets.length > 0) {
     binds.push(id);
-    await db.prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`).bind(...binds).run();
+    await db
+      .prepare(`UPDATE tasks SET ${sets.join(", ")} WHERE id = ?`)
+      .bind(...binds)
+      .run();
   }
 
   // If transitioning away from live or explicitly requested, remove pending live messages
-  if (config.clear_pending || config.scope === "backfill_only" || config.live_enabled === false) {
-    await db.prepare(`DELETE FROM task_pending_messages WHERE task_id = ?`).bind(id).run();
+  if (config.clear_pending || config.scope === "backfill_only") {
+    await db
+      .prepare(`DELETE FROM task_pending_messages WHERE task_id = ?`)
+      .bind(id)
+      .run();
   }
 }
 
-
-export async function extendTaskEndId(db: D1Database, taskId: string, messageId: number): Promise<void> {
+export async function extendTaskEndId(
+  db: D1Database,
+  taskId: string,
+  messageId: number,
+): Promise<void> {
   await db
     .prepare(
       `UPDATE tasks
@@ -504,7 +620,10 @@ export async function advanceTaskProgress(
     .first<{ backfill_status: BackfillStatus; end_id: number | null }>();
 
   const isComplete = row?.backfill_status === "complete";
-  return { backfill_status: row?.backfill_status ?? "running", complete: isComplete };
+  return {
+    backfill_status: row?.backfill_status ?? "running",
+    complete: isComplete,
+  };
 }
 
 export async function incrementLiveCounters(
@@ -563,7 +682,11 @@ export async function stopTasksForBot(
  * stopTasksForBot. Resuming via updateTaskStatus (PATCH /tasks/:id) clears
  * stop_reason/stopped_at, so fixing access in Telegram and resuming from
  * the UI picks the task back up from the same cursor. */
-export async function stopTask(db: D1Database, id: string, reason: ErrorReason): Promise<void> {
+export async function stopTask(
+  db: D1Database,
+  id: string,
+  reason: ErrorReason,
+): Promise<void> {
   await db
     .prepare(
       `UPDATE tasks
@@ -598,7 +721,11 @@ export async function stopTask(db: D1Database, id: string, reason: ErrorReason):
  * Trade-off: a stranded lease now parks one bot (not one task) for
  * LEASE_SECONDS; acceptable since all of a bot's tasks share one token and
  * one quota anyway, and it still self-heals once the lease expires. */
-export async function claimTask(db: D1Database, id: string, leaseSeconds: number): Promise<TaskSummary | null> {
+export async function claimTask(
+  db: D1Database,
+  id: string,
+  leaseSeconds: number,
+): Promise<TaskSummary | null> {
   const row = await db
     .prepare(
       `UPDATE tasks
@@ -628,10 +755,14 @@ export async function claimTask(db: D1Database, id: string, leaseSeconds: number
  * so the whole bot backs off together rather than just the task that hit
  * the 429. Re-checked by listRunningBackfillTasks/claimTask (backfill) and
  * the webhook live-forward loop before either makes another Telegram call. */
-export async function pauseBotForRateLimit(db: D1Database, botId: string, until: number): Promise<void> {
+export async function pauseBotForRateLimit(
+  db: D1Database,
+  botId: string,
+  until: number,
+): Promise<void> {
   await db
     .prepare(
-      `UPDATE tasks SET rate_limited_until = ?
+      `UPDATE tasks SET rate_limited_until = MAX(COALESCE(rate_limited_until, 0), ?)
        WHERE bot_id = ? AND (backfill_status = 'running' OR live_enabled = 1)`,
     )
     .bind(until, botId)
@@ -645,7 +776,10 @@ export interface BotRateLimitStats {
   events_last_24h: number;
 }
 
-export async function getBotRateLimitStats(db: D1Database, botId: string): Promise<BotRateLimitStats> {
+export async function getBotRateLimitStats(
+  db: D1Database,
+  botId: string,
+): Promise<BotRateLimitStats> {
   const now = Math.floor(Date.now() / 1000);
 
   const cooldownRow = await db
@@ -680,25 +814,51 @@ export async function getBotRateLimitStats(db: D1Database, botId: string): Promi
 /** Releases a task's lease so a still-waiting concurrent tick (or the very
  * next one) doesn't have to wait out the TTL. Safe to call unconditionally
  * from a `finally` — a no-op if the task was deleted or never leased. */
-export async function releaseTaskLease(db: D1Database, id: string): Promise<void> {
-  await db.prepare(`UPDATE tasks SET lease_expires_at = NULL WHERE id = ?`).bind(id).run();
+export async function releaseTaskLease(
+  db: D1Database,
+  id: string,
+): Promise<void> {
+  await db
+    .prepare(`UPDATE tasks SET lease_expires_at = NULL WHERE id = ?`)
+    .bind(id)
+    .run();
 }
 
 // Activity log
 
 export async function appendActivityLog(
   db: D1Database,
-  entry: { task_id: string; kind: "live_forward" | "backfill_batch"; detail?: string; ok: boolean; error?: string },
+  entry: {
+    task_id: string;
+    kind: "live_forward" | "backfill_batch";
+    detail?: string;
+    ok: boolean;
+    error?: string;
+  },
 ): Promise<void> {
   await db
-    .prepare(`INSERT INTO task_activity_log (task_id, kind, detail, ok, error) VALUES (?,?,?,?,?)`)
-    .bind(entry.task_id, entry.kind, entry.detail ?? null, entry.ok ? 1 : 0, entry.error ?? null)
+    .prepare(
+      `INSERT INTO task_activity_log (task_id, kind, detail, ok, error) VALUES (?,?,?,?,?)`,
+    )
+    .bind(
+      entry.task_id,
+      entry.kind,
+      entry.detail ?? null,
+      entry.ok ? 1 : 0,
+      entry.error ?? null,
+    )
     .run();
 }
 
-export async function listActivityLog(db: D1Database, taskId: string, limit = 50) {
+export async function listActivityLog(
+  db: D1Database,
+  taskId: string,
+  limit = 50,
+) {
   const { results } = await db
-    .prepare(`SELECT * FROM task_activity_log WHERE task_id = ? ORDER BY at DESC LIMIT ?`)
+    .prepare(
+      `SELECT * FROM task_activity_log WHERE task_id = ? ORDER BY at DESC, id DESC LIMIT ?`,
+    )
     .bind(taskId, limit)
     .all();
   return results;
@@ -708,11 +868,15 @@ const ACTIVITY_LOG_KEEP_PER_TASK = 100;
 
 /** Bounds per-task row growth on activity logs — keeps the most recent
  * ACTIVITY_LOG_KEEP_PER_TASK rows, drops older entries. */
-export async function pruneActivityLog(db: D1Database, taskId: string, keepLimit = ACTIVITY_LOG_KEEP_PER_TASK): Promise<void> {
+export async function pruneActivityLog(
+  db: D1Database,
+  taskId: string,
+  keepLimit = ACTIVITY_LOG_KEEP_PER_TASK,
+): Promise<void> {
   await db
     .prepare(
       `DELETE FROM task_activity_log WHERE task_id = ? AND id NOT IN (
-         SELECT id FROM task_activity_log WHERE task_id = ? ORDER BY at DESC LIMIT ?
+         SELECT id FROM task_activity_log WHERE task_id = ? ORDER BY at DESC, id DESC LIMIT ?
        )`,
     )
     .bind(taskId, taskId, keepLimit)
@@ -720,12 +884,15 @@ export async function pruneActivityLog(db: D1Database, taskId: string, keepLimit
 }
 
 /** Global activity log garbage collection across all tasks. */
-export async function pruneAllActivityLogs(db: D1Database, keepLimit = ACTIVITY_LOG_KEEP_PER_TASK): Promise<void> {
+export async function pruneAllActivityLogs(
+  db: D1Database,
+  keepLimit = ACTIVITY_LOG_KEEP_PER_TASK,
+): Promise<void> {
   await db
     .prepare(
       `DELETE FROM task_activity_log WHERE id NOT IN (
          SELECT id FROM (
-           SELECT id, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY at DESC) as rn
+           SELECT id, ROW_NUMBER() OVER (PARTITION BY task_id ORDER BY at DESC, id DESC) as rn
            FROM task_activity_log
          ) WHERE rn <= ?
        )`,
@@ -736,14 +903,19 @@ export async function pruneAllActivityLogs(db: D1Database, keepLimit = ACTIVITY_
 
 // Raw update log (debugging)
 
-export async function insertUpdate(db: D1Database, botId: string, updateId: number, payload: unknown): Promise<void> {
+export async function insertUpdate(
+  db: D1Database,
+  botId: string,
+  updateId: number,
+  payload: unknown,
+): Promise<void> {
   await db
-    .prepare(`INSERT INTO updates (bot_id, update_id, payload_json) VALUES (?, ?, ?)`)
+    .prepare(
+      `INSERT INTO updates (bot_id, update_id, payload_json) VALUES (?, ?, ?)`,
+    )
     .bind(botId, updateId, JSON.stringify(payload))
     .run();
 }
-
-
 
 // Saved Tasks — reusable templates, deliberately decoupled from bots/tasks
 // so they survive deletion of either (see 0008_saved_tasks.sql).
@@ -769,7 +941,10 @@ export interface NewSavedTask {
   filter_max_size_bytes?: number | null;
 }
 
-export async function insertSavedTask(db: D1Database, t: NewSavedTask): Promise<void> {
+export async function insertSavedTask(
+  db: D1Database,
+  t: NewSavedTask,
+): Promise<void> {
   await db
     .prepare(
       `INSERT INTO saved_tasks (
@@ -802,11 +977,13 @@ export async function insertSavedTask(db: D1Database, t: NewSavedTask): Promise<
     .run();
 }
 
-export async function listSavedTasks(db: D1Database): Promise<SavedTaskSummary[]> {
+export async function listSavedTasks(
+  db: D1Database,
+): Promise<SavedTaskSummary[]> {
   const { results } = await db
     .prepare(
       `SELECT id, task_id, bot_label, bot_username,
-              substr(bot_token, 1, 6) || '…' || substr(bot_token, -4) AS token_preview,
+              'Stored securely' AS token_preview,
               source_chat_id, source_chat_title, dest_chat_id, dest_chat_title,
               scope, backfill_mode, start_id, end_id, n, pacing_batch_size,
               filter_media_types, filter_min_size_bytes, filter_max_size_bytes,
@@ -817,11 +994,18 @@ export async function listSavedTasks(db: D1Database): Promise<SavedTaskSummary[]
   return results;
 }
 
-export async function getSavedTask(db: D1Database, id: string): Promise<SavedTaskWithToken | null> {
+export interface SavedTaskRecord extends SavedTaskSummary {
+  bot_token: string;
+}
+
+export async function getSavedTask(
+  db: D1Database,
+  id: string,
+): Promise<SavedTaskRecord | null> {
   const row = await db
     .prepare(
       `SELECT id, task_id, bot_token, bot_label, bot_username,
-              substr(bot_token, 1, 6) || '…' || substr(bot_token, -4) AS token_preview,
+              'Stored securely' AS token_preview,
               source_chat_id, source_chat_title, dest_chat_id, dest_chat_title,
               scope, backfill_mode, start_id, end_id, n, pacing_batch_size,
               filter_media_types, filter_min_size_bytes, filter_max_size_bytes,
@@ -829,11 +1013,14 @@ export async function getSavedTask(db: D1Database, id: string): Promise<SavedTas
        FROM saved_tasks WHERE id = ?`,
     )
     .bind(id)
-    .first<SavedTaskWithToken>();
+    .first<SavedTaskRecord>();
   return row ?? null;
 }
 
-export async function deleteSavedTask(db: D1Database, id: string): Promise<void> {
+export async function deleteSavedTask(
+  db: D1Database,
+  id: string,
+): Promise<void> {
   await db.prepare(`DELETE FROM saved_tasks WHERE id = ?`).bind(id).run();
 }
 
@@ -859,36 +1046,61 @@ export async function insertPendingMessage(
 ): Promise<void> {
   await db
     .prepare(
-      `INSERT INTO task_pending_messages (task_id, message_id, media_type, file_size, file_name)
+      `INSERT OR IGNORE INTO task_pending_messages (task_id, message_id, media_type, file_size, file_name)
        VALUES (?, ?, ?, ?, ?)`,
     )
-    .bind(taskId, messageId, mediaType ?? null, fileSize ?? null, fileName ?? null)
+    .bind(
+      taskId,
+      messageId,
+      mediaType ?? null,
+      fileSize ?? null,
+      fileName ?? null,
+    )
     .run();
 }
 
-export async function listPendingMessages(db: D1Database, taskId: string, limit = 50): Promise<PendingMessageRow[]> {
+export async function listPendingMessages(
+  db: D1Database,
+  taskId: string,
+  limit = 50,
+): Promise<PendingMessageRow[]> {
   const { results } = await db
-    .prepare(`SELECT * FROM task_pending_messages WHERE task_id = ? ORDER BY id ASC LIMIT ?`)
+    .prepare(
+      `SELECT * FROM task_pending_messages WHERE task_id = ? ORDER BY id ASC LIMIT ?`,
+    )
     .bind(taskId, limit)
     .all<PendingMessageRow>();
   return results;
 }
 
-export async function countPendingMessages(db: D1Database, taskId: string): Promise<number> {
+export async function countPendingMessages(
+  db: D1Database,
+  taskId: string,
+): Promise<number> {
   const row = await db
-    .prepare(`SELECT COUNT(*) as count FROM task_pending_messages WHERE task_id = ?`)
+    .prepare(
+      `SELECT COUNT(*) as count FROM task_pending_messages WHERE task_id = ?`,
+    )
     .bind(taskId)
     .first<{ count: number }>();
   return row?.count ?? 0;
 }
 
-export async function deletePendingMessages(db: D1Database, ids: number[]): Promise<void> {
+export async function deletePendingMessages(
+  db: D1Database,
+  ids: number[],
+): Promise<void> {
   if (ids.length === 0) return;
   const placeholders = ids.map(() => "?").join(",");
-  await db.prepare(`DELETE FROM task_pending_messages WHERE id IN (${placeholders})`).bind(...ids).run();
+  await db
+    .prepare(`DELETE FROM task_pending_messages WHERE id IN (${placeholders})`)
+    .bind(...ids)
+    .run();
 }
 
-export async function listTasksWithPendingMessages(db: D1Database): Promise<TaskSummary[]> {
+export async function listTasksWithPendingMessages(
+  db: D1Database,
+): Promise<TaskSummary[]> {
   const { results } = await db
     .prepare(
       `SELECT DISTINCT tasks.* FROM tasks
@@ -902,3 +1114,94 @@ export async function listTasksWithPendingMessages(db: D1Database): Promise<Task
   return results.map(rowToTask);
 }
 
+/** Lease includes polling and queue delivery, not only historical batches. */
+export async function claimBotPoll(
+  db: D1Database,
+  id: string,
+  token: string,
+  seconds: number,
+): Promise<boolean> {
+  const row = await db
+    .prepare(
+      `UPDATE bots SET polling_lease_token = ?, polling_lease_expires_at = unixepoch() + ?
+    WHERE id = ? AND (polling_lease_expires_at IS NULL OR polling_lease_expires_at <= unixepoch())
+    AND NOT EXISTS (SELECT 1 FROM bots sibling WHERE sibling.bot_id = bots.bot_id AND sibling.id != bots.id
+      AND sibling.polling_lease_expires_at > unixepoch()) RETURNING id`,
+    )
+    .bind(token, seconds, id)
+    .first();
+  return Boolean(row);
+}
+
+export async function releaseBotPoll(
+  db: D1Database,
+  id: string,
+  token: string,
+): Promise<void> {
+  await db
+    .prepare(
+      `UPDATE bots SET polling_lease_token = NULL, polling_lease_expires_at = NULL
+    WHERE id = ? AND polling_lease_token = ?`,
+    )
+    .bind(id, token)
+    .run();
+}
+
+export interface LiveUpdateEntry {
+  taskId: string;
+  messageId: number;
+  mediaType: string;
+  fileSize: number | null;
+  fileName: string | null;
+  skippedReason?: string;
+}
+
+/** Queue writes and Telegram offset advance commit together. A failed D1 write
+ * leaves the update unacknowledged so Telegram can deliver it again safely. */
+export async function recordLiveUpdate(
+  db: D1Database,
+  botId: string,
+  updateId: number,
+  entries: LiveUpdateEntry[],
+): Promise<void> {
+  const statements: D1PreparedStatement[] = [];
+  for (const entry of entries) {
+    if (entry.skippedReason) {
+      statements.push(
+        db
+          .prepare(
+            `UPDATE tasks SET live_skipped = live_skipped + 1 WHERE id = ?
+        AND (SELECT last_update_id FROM bots WHERE id = ?) < ?`,
+          )
+          .bind(entry.taskId, botId, updateId),
+      );
+    } else {
+      statements.push(
+        db
+          .prepare(
+            `INSERT OR IGNORE INTO task_pending_messages(task_id,message_id,media_type,file_size,file_name)
+        SELECT ?,?,?,?,? WHERE EXISTS (SELECT 1 FROM tasks WHERE id = ? AND live_enabled = 1)
+        AND (SELECT last_update_id FROM bots WHERE id = ?) < ?`,
+          )
+          .bind(
+            entry.taskId,
+            entry.messageId,
+            entry.mediaType,
+            entry.fileSize,
+            entry.fileName,
+            entry.taskId,
+            botId,
+            updateId,
+          ),
+      );
+    }
+  }
+  statements.push(
+    db
+      .prepare(
+        `UPDATE bots SET last_update_id = MAX(last_update_id, ?) WHERE id = ?`,
+      )
+      .bind(updateId, botId),
+  );
+  await db.batch(statements);
+}

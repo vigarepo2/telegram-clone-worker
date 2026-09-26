@@ -1,71 +1,60 @@
 import type { Result, TaskSummary } from "../../shared/rpcTypes";
 
-const AUTH_TOKEN_KEY = "tg_auth_token";
-
-export function getAuthToken(): string | null {
+async function request<T>(
+  path: string,
+  init?: RequestInit,
+): Promise<Result<T>> {
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 45000);
   try {
-    return localStorage.getItem(AUTH_TOKEN_KEY);
-  } catch {
-    return null;
-  }
-}
-
-export function setAuthToken(token: string): void {
-  try {
-    localStorage.setItem(AUTH_TOKEN_KEY, token);
-  } catch {
-    // ignore
-  }
-}
-
-export function clearAuthToken(): void {
-  try {
-    localStorage.removeItem(AUTH_TOKEN_KEY);
-  } catch {
-    // ignore
-  }
-}
-
-async function request<T>(path: string, init?: RequestInit): Promise<Result<T>> {
-  try {
-    const token = getAuthToken();
-    const headers: Record<string, string> = {
-      "content-type": "application/json",
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...((init?.headers as Record<string, string>) ?? {}),
-    };
-
     const res = await fetch(path, {
       ...init,
-      headers,
+      credentials: "same-origin",
+      cache: "no-store",
+      signal: controller.signal,
+      headers: { "content-type": "application/json", ...init?.headers },
     });
-
-    if (res.status === 401 && !path.startsWith("/api/auth/login")) {
-      clearAuthToken();
-      window.dispatchEvent(new CustomEvent("tg_auth_unauthorized"));
+    if (res.status === 401 && !path.startsWith("/api/auth/")) {
+      window.dispatchEvent(new Event("tg_auth_unauthorized"));
+    }
+    if (!res.headers.get("content-type")?.includes("application/json")) {
       return {
         ok: false,
-        errorCode: 401,
-        description: "Authentication session expired or invalid",
-        reason: "unauthorized",
+        errorCode: res.status,
+        description: "The server could not respond. Please try again.",
+        reason: "unknown",
       };
     }
-
     const body = (await res.json()) as Result<T>;
+    if (typeof body?.ok !== "boolean")
+      return {
+        ok: false,
+        errorCode: res.status,
+        description: "The server returned an unexpected response.",
+        reason: "unknown",
+      };
     return body;
-  } catch (e) {
-    return { ok: false, errorCode: 0, description: e instanceof Error ? e.message : String(e), reason: "unknown" };
+  } catch (error) {
+    return {
+      ok: false,
+      errorCode: 0,
+      description:
+        error instanceof Error && error.name === "AbortError"
+          ? "This request took too long. Check its status before trying again."
+          : "Could not connect. Check your connection and try again.",
+      reason: "unknown",
+    };
+  } finally {
+    window.clearTimeout(timeout);
   }
 }
 
 export const api = {
   get: <T>(path: string) => request<T>(path),
-  post: <T>(path: string, body?: unknown) => request<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined }),
-  patch: <T>(path: string, body?: unknown) => request<T>(path, { method: "PATCH", body: body ? JSON.stringify(body) : undefined }),
+  post: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: "POST", body: JSON.stringify(body ?? {}) }),
+  patch: <T>(path: string, body?: unknown) =>
+    request<T>(path, { method: "PATCH", body: JSON.stringify(body ?? {}) }),
   del: <T>(path: string) => request<T>(path, { method: "DELETE" }),
 };
-
-/** Fetches all tasks across all bots in a single query. */
-export async function listAllTasks(): Promise<Result<TaskSummary[]>> {
-  return api.get<TaskSummary[]>("/api/tasks");
-}
+export const listAllTasks = () => api.get<TaskSummary[]>("/api/tasks");

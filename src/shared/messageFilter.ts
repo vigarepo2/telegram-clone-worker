@@ -22,7 +22,18 @@ export interface FilterEvaluation {
 }
 
 /** Extracts standardized media type, file size, and file name from a TelegramMessage. */
-export function extractMessageMetadata(msg: TelegramMessage): ExtractedMetadata {
+export function extractMessageMetadata(
+  msg: TelegramMessage,
+): ExtractedMetadata {
+  if (msg.animation) {
+    return {
+      type: "animation",
+      size: msg.animation.file_size,
+      name: msg.animation.file_name,
+      mimeType: msg.animation.mime_type,
+    };
+  }
+
   if (msg.document) {
     return {
       type: "document",
@@ -38,15 +49,6 @@ export function extractMessageMetadata(msg: TelegramMessage): ExtractedMetadata 
       size: msg.video.file_size,
       name: msg.video.file_name,
       mimeType: msg.video.mime_type,
-    };
-  }
-
-  if (msg.animation) {
-    return {
-      type: "animation",
-      size: msg.animation.file_size,
-      name: msg.animation.file_name,
-      mimeType: msg.animation.mime_type,
     };
   }
 
@@ -83,31 +85,34 @@ export function extractMessageMetadata(msg: TelegramMessage): ExtractedMetadata 
 
 /** Converts byte values to human-readable string (e.g. 14.5 MB, 1.2 GB). */
 export function formatBytes(bytes?: number): string {
-  if (bytes == null || bytes === 0) return "0 B";
+  if (bytes == null || !Number.isFinite(bytes) || bytes <= 0) return "0 B";
   const k = 1024;
   const sizes = ["B", "KB", "MB", "GB"];
-  const i = Math.floor(Math.log(bytes) / Math.log(k));
+  const i = Math.min(
+    sizes.length - 1,
+    Math.max(0, Math.floor(Math.log(bytes) / Math.log(k))),
+  );
   const val = parseFloat((bytes / Math.pow(k, i)).toFixed(1));
   return `${val} ${sizes[i] || "B"}`;
 }
 
-/** Returns an emoji icon and label for a media type. */
+/** Plain label for logs. UI icons are rendered from src/assets. */
 export function getMediaIcon(type: string): string {
   switch (type) {
     case "video":
-      return "🎬 Video";
+      return "Video";
     case "document":
-      return "📄 Document";
+      return "Document";
     case "photo":
-      return "🖼️ Photo";
+      return "Photo";
     case "audio":
-      return "🎵 Audio";
+      return "Audio";
     case "voice":
-      return "🎙️ Voice";
+      return "Voice";
     case "animation":
-      return "🎭 GIF";
+      return "GIF";
     default:
-      return "💬 Text";
+      return "Text";
   }
 }
 
@@ -129,7 +134,8 @@ export function evaluateMessageFilter(
         detectedType: type,
         detectedSize: size,
         detectedName: name,
-        reason: type === "text" ? "text-only not allowed" : `${type}s filtered out`,
+        reason:
+          type === "text" ? "text-only not allowed" : `${type}s filtered out`,
       };
     }
   }

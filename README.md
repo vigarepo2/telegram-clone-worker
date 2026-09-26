@@ -1,293 +1,152 @@
 # Telegram Clone Worker
 
-<p align="center">
-  <img src="https://img.shields.io/badge/Cloudflare_Workers-F38020?style=for-the-badge&logo=cloudflare&logoColor=white" alt="Cloudflare Workers" />
-  <img src="https://img.shields.io/badge/Cloudflare_D1-SQLite-blue?style=for-the-badge&logo=sqlite&logoColor=white" alt="Cloudflare D1" />
-  <img src="https://img.shields.io/badge/React_19-20232A?style=for-the-badge&logo=react&logoColor=61DAFB" alt="React 19" />
-  <img src="https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white" alt="TypeScript" />
-  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="MIT License" />
-</p>
+Copy messages between Telegram channels and groups from a private web dashboard. Runs on Cloudflare Workers with one D1 database. No separate server, paid API, or required environment variables.
 
-<p align="center">
-  <strong>Fast, serverless Telegram channel cloner, batch backfiller, and real-time live synchronization engine.</strong><br />
-  Runs natively on <strong>Cloudflare Workers</strong>, <strong>Cloudflare D1 (Serverless SQLite)</strong>, and the <strong>Telegram Bot API</strong>.
-</p>
+This fork keeps the original copying workflow and rebuilds the interface, account protection, and database initialization.
 
-<p align="center">
-  <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/iamLiquidX/telegram-clone-worker">
-    <img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare Workers" />
-  </a>
-</p>
+## Preview
 
----
+The screenshots use example data. Your dashboard starts empty.
 
-## Overview
+![Desktop dashboard](docs/images/dashboard.png)
 
-**Telegram Clone Worker** is a self-hosted, cloud-native Telegram management engine and web console designed to replicate message history between Telegram channels and groups at maximum speed, while staying completely within Telegram's rate limits and Cloudflare's free-tier boundaries.
+[Phone layout](docs/images/dashboard_mobile.png) · [Task details](docs/images/task_detail.png)
 
-Whether you need to migrate an archive of 100,000+ historical media files, maintain a real-time live mirror of an active broadcast channel, or selectively forward specific media types (videos, documents, audio) above a certain file size threshold, Telegram Clone Worker handles it all automatically in the background.
+## Deploy
 
----
+The repository already includes this D1 binding in `wrangler.jsonc`:
 
-## Screenshots
-
-<p align="center">
-  <img src="docs/images/dashboard.png" alt="Telegram Clone Worker - Active Tasks Dashboard" width="100%" />
-</p>
-<p align="center"><em>Real-time dashboard tracking active pipelines, messages copied counter, and multi-bot metrics.</em></p>
-
-<br />
-
-<p align="center">
-  <img src="docs/images/task_detail.png" alt="Telegram Clone Worker - Pipeline Execution & Task Specification" width="100%" />
-</p>
-<p align="center"><em>Granular task view showing backfill progress, live auto-sync polling status, and channel bindings.</em></p>
-
----
-
-## Key Features
-
-### 🚀 High-Throughput Backfill Engine
-- **Sequential Range Backfill**: Clone full history between exact message IDs (`start_id` to `end_id`) with configurable pacing batch sizes (default: 60 messages/minute).
-- **"Last N" Recent Backfill**: Fast backward-scanning discovery to clone the latest *N* messages without needing to guess channel start IDs.
-- **Resilient Gap Handling**: Deleted posts or empty message IDs in Telegram channels are skipped cleanly without stalling the pipeline or throwing false failures.
-
-### ⚡ 1-Minute Live Stream Auto-Sync
-- **Cron-Driven Polling**: Automatically checks Telegram updates every minute across all active bots with multi-page update draining (up to 500 updates per tick).
-- **Two-Stage Catch-Up Stream**: Buffers incoming live messages while an initial history backfill is active, and automatically drains the buffer in sequential order once the backfill finishes.
-
-### 🔍 Granular Message & Size Filtering
-- **Media Type Filtering**: Choose to copy all messages or restrict to specific media types (`document`, `video`, `photo`, `audio`).
-- **File Size Thresholds**: Filter media by file size (e.g. only copy files `≥ 10 MB` or ignore files `> 500 MB`).
-- **Live Filter Telemetry**: See real-time skip and match logs directly in your activity feed.
-
-### 🛡️ Enterprise Multi-Bot Scaling & Rate Limit Protection
-- **Concurrency Limiter**: Multi-bot polling strictly adheres to Cloudflare Workers' 6-connection ceiling, preventing silent socket stalls.
-- **Atomic Bot Leases**: Bot-scoped locks guarantee tasks on the same bot never collide or flood Telegram with parallel batches.
-- **Automatic 429 Cooldown**: Catches Telegram rate limits (`retry_after`), pauses the specific bot, and automatically resumes once the cooldown expires.
-- **401 & 409 Self-Healing**:
-  - Automatically detects revoked tokens (401 Unauthorized), pauses the affected task, and logs actionable alerts.
-  - Automatically detects and resolves Telegram webhook conflicts (409 Conflict) by calling `deleteWebhook` on the fly.
-
-### 🖥️ Modern Web Management Console
-- Built with **React 19**, **Vite**, and tokenized CSS.
-- **Zero Duplication Information Architecture**: Single unified view for Historical Backfill progress, Live Auto-Sync metrics, and Task Specifications.
-- **Diagnostic Hub**: Send ad-hoc test copies directly from the console to verify bot permissions before running bulk tasks.
-- **Task Templates**: Save source/destination configurations to clone new tasks in seconds.
-- **Responsive Layout**: Docked bottom footer on desktop/tablet views and touch-friendly mobile drawer.
-- **Fail-Safe Error Boundary**: React crashes are caught gracefully with intuitive recovery actions instead of blank screens.
-
-### 🔐 Optional Admin Security & Authentication
-- **Zero-Friction Master Password**: Protect your web console by defining an optional `ADMIN_PASSWORD` secret in Cloudflare or setting one via the browser on first launch.
-- **Open Access Mode**: If you prefer an open console, simply tap "Proceed without password". You can secure it at any time directly from the console navigation.
-- **Stateless Web Crypto Sessions**: HMAC-SHA256 signed bearer tokens validated in `< 0.05ms` CPU with **zero D1 database reads/writes**, adding 0 overhead to the 4-second polling loops.
-
----
-
-## Architecture
-
-```mermaid
-flowchart LR
-    subgraph Telegram ["Telegram Infrastructure"]
-        TG_API["Telegram Bot API"]
-        SRC_CHAT["Source Channel"]
-        DST_CHAT["Destination Channel"]
-    end
-
-    subgraph Cloudflare ["Cloudflare Workers Platform"]
-        CRON["Scheduled Cron (1 min)"]
-        HTTP["HTTP Fetch Handler"]
-        WORKER["Telegram Clone Worker Engine"]
-        D1[("Cloudflare D1 (SQLite)\n• bots\n• tasks\n• activity_log\n• pending_buffer")]
-        ASSETS["Static Web Assets (React 19 SPA)"]
-    end
-
-    subgraph Client ["Browser Console"]
-        UI["Web Dashboard"]
-    end
-
-    CRON -->|Trigger| WORKER
-    HTTP -->|API Requests| WORKER
-    WORKER <-->|Query & Mutate| D1
-    WORKER <-->|getUpdates / copyMessages| TG_API
-    TG_API -->|Read| SRC_CHAT
-    TG_API -->|Post| DST_CHAT
-    UI <-->|Manage Tasks & Telemetry| HTTP
-    UI <-->|Load UI| ASSETS
+```json
+{
+  "binding": "DB",
+  "database_name": "telegram-clone-worker-db",
+  "database_id": "1b41441c-10d3-40fb-beba-08d8ab194fb5"
+}
 ```
 
----
+1. In Cloudflare, create a Worker connected to this repository.
+2. Use `npm run build` as the build command and `npx wrangler deploy` as the deploy command. Leave the root directory at the repository root.
+3. Make sure the D1 database above belongs to the same Cloudflare account. If you fork this repository to another account, create your own D1 database and replace its ID.
+4. Deploy and open the Worker URL. Tables and required schema additions are created automatically.
+5. Complete the one-time account setup below.
 
-## Things to Keep in Mind (Gotchas & Best Practices)
+The minute-by-minute schedule is included in Wrangler. Copying continues when the browser is closed. Cloudflare and Telegram limits still apply; throughput depends on your bot, destination, and account plan.
 
-> [!IMPORTANT]
-> **1. Bot Permissions in Telegram**
-> - **Destination Channel**: The bot **MUST** be added as an **Administrator** with the **"Post Messages"** permission. Without this, Telegram will reject all copy attempts with `400 Bad Request: CHAT_ADMIN_REQUIRED` or `403 Forbidden`.
-> - **Source Channel**: The bot must be a member of the source channel. If the source channel is private, the bot must be invited or added as an admin.
+## First sign-in
 
-> [!WARNING]
-> **2. Protected Content / Restrict Saving Content**
-> - If the source channel has the **"Restrict saving content"** setting enabled in its channel settings, Telegram blocks bots from copying or forwarding messages using standard Bot API methods (`copyMessages`).
-> - This is a Telegram server-side restriction enforced on all bots.
+The dashboard stays locked until you create its password. There is no public access mode.
 
-> [!NOTE]
-> **3. Telegram Rate Limits & Best Practices**
-> - Telegram limits bots to approximately **20 messages per minute per chat**, and **30 messages per second globally**.
-> - Telegram Clone Worker paces batch copying to ~60 messages/minute in bulk mode. If Telegram returns an HTTP 429 rate limit, the worker automatically pauses that bot for the exact `retry_after` duration returned by Telegram.
-> - **💡 Best Practice (1 Bot per Backfill Task)**: Telegram rate limits apply per bot token. Running multiple historical backfills concurrently on the same bot token quickly triggers severe `429 Flood Wait` cooldowns (often pausing the bot for 5 to 30+ minutes). For large channel backfills, always create a separate bot token in `@BotFather` for each backfilling task to achieve uninterrupted full copy speed.
+On the first visit, the Worker creates a private setup code. To retrieve it, open **Cloudflare → Storage & databases → D1 → telegram-clone-worker-db → Console** and run:
 
-> [!TIP]
-> **4. Bot Token Security**
-> - Bot tokens are stored securely in your private Cloudflare D1 database. They are never sent to the browser or leaked to public endpoints.
-> - Never commit bot tokens into Git or publish your D1 database dumps publicly.
+```sql
+SELECT value FROM app_settings WHERE key = 'setup_code';
+```
 
-> [!NOTE]
-> **5. Cloudflare Free Tier Boundaries & D1 Resource Usage (50 Bots / Day)**
-> - **Cloudflare Workers Free Plan**: Includes 100,000 requests/day and 10ms CPU time per request (Worker cron uses only 1,440 invocations/day = 1.4%).
-> - **Cloudflare D1 Free Plan**: Includes **5,000,000 read rows/day** and **100,000 write rows/day**.
-> - **50 Bots Read Consumption**: At 1-minute cron intervals (1,440 ticks/day), listing active tasks (~50 rows) and fetching bot secrets (50 point-lookups) consumes ~100 rows per tick = **~144,000 reads/day** (uses only **2.88%** of your 5M free daily read limit).
-> - **50 Bots Write Consumption**:
->   - **Live Auto-Sync**: Consumes 0 writes when chats are idle; ~3 to 4 writes per delivered message (e.g. 2,000 messages/day across 50 channels = **~7,000 writes/day**, or **7%** of the free write limit).
->   - **Active Historical Backfill**: Each active backfilling bot consumes ~4 writes per 60-message batch (~5,830 writes/day). On the **100% Free Plan**, you can run up to **15 bots backfilling simultaneously 24/7** (~1.3M messages/day). If all 50 bots backfill 24/7 (~4.3M messages/day), D1 writes reach ~291k/day, costing only ~$0.19/day on the Cloudflare Workers Paid plan.
+Paste the result into the setup page and choose a password of at least 12 characters. The code is removed after setup. This proves that the person creating the account owns the database; knowing the public website address is not enough.
 
----
+An existing `ADMIN_PASSWORD` secret continues to work. It is optional. Existing passwords stored by earlier versions also remain usable. Browser sessions from the old version require signing in again.
 
-## 1-Click Deployment (Recommended)
+## Start copying
 
-Deploy your own instance of Telegram Clone Worker with a single click:
+1. Choose **New task** and connect a Telegram bot using its token from [BotFather](https://t.me/BotFather).
+2. Add that bot to both chats. For a destination channel, give it permission to post messages.
+3. Enter the source and destination using their usernames, chat IDs, or supported Telegram links, then check access.
+4. Choose what to copy: new messages, message history, or both.
+5. Review and start the task. Progress and any problems appear in the task details.
 
-[![Deploy to Cloudflare Workers](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/iamLiquidX/telegram-clone-worker)
+Use a dedicated bot for this app. Telegram allows only one update consumer for a bot; another app using its webhook or polling can prevent live copying. This app does not silently disconnect another service. Any disconnect action requires an explicit choice.
 
-### How It Works:
-1. Click the **Deploy with Workers** button above.
-2. Sign in to your Cloudflare account and authorize GitHub.
-3. Cloudflare will automatically:
-   - Fork/clone this repository to your account.
-   - Provision a new **Cloudflare D1 database** (`telegram-clone-worker-db`).
-   - Deploy the Worker and static assets.
-4. **Activate Your Worker URL (One-time, 1-Click in Cloudflare Dashboard)**:
-   - When Cloudflare creates a new Worker from a connected Git repository, it allocates your unique subdomain (`telegram-clone-worker.<your-subdomain>.workers.dev`) with the route initially set to *Disabled* by default for safety.
-   - To activate your public URL:
-     1. In your Cloudflare Dashboard, open **Workers & Pages** and click **`telegram-clone-worker`**.
-     2. Click the **Domains** tab in the top navigation bar (or click **Domains and routes →** on the right sidebar).
-     3. Under the **workers.dev** section, click **Enable**.
-     4. Your Worker URL is now live (`https://telegram-clone-worker.<your-subdomain>.workers.dev`).
-      5. This is a **one-time step** — all future code pushes and updates will remain permanently live at this URL!
-    - *(Optional)* You can also click **Add custom domain** in the same **Domains** tab to serve the application on your own branded domain (e.g. `clone.yourdomain.com`).
-5. **Zero-Config Database Initialization**:
-   - The worker features an automatic bootstrap engine ([`src/db/bootstrap.ts`](file:///C:/Users/LiquidX/Documents/Snoop%20and%20Conf/project%20bot%20access/src/db/bootstrap.ts)).
-   - When you visit your deployed worker URL for the first time, all tables and indexes are created automatically. You do **not** need to run any manual terminal migration commands!
-6. **Configuring Admin Password (Optional)**:
-   - **Via Cloudflare Dashboard**: Go to **Workers & Pages > telegram-clone-worker > Settings > Variables and Secrets**, and add a secret named `ADMIN_PASSWORD`. When set, the console strictly requires this password to log in.
-   - **Via CLI**: Run `npx wrangler secret put ADMIN_PASSWORD` in your terminal.
-   - **Via Browser**: If you do not configure `ADMIN_PASSWORD`, opening the console for the first time will ask if you want to set an admin password or proceed with open access. You can protect or unprotect your console at any time.
+### History and filters
 
----
+- A message range copies the IDs between the start and end. Deleted, service, or otherwise uncopyable messages may be skipped by Telegram.
+- The recent-message option finds the latest ID by briefly posting a probe in the source, then deleting it. It needs posting and deletion rights. If cleanup fails, remove the probe manually. The selected number is an ID window, not a guarantee of that many surviving posts.
+- Media-type and size filters apply to **new incoming messages**. Telegram's Bot API does not provide arbitrary historical message metadata, so those filters cannot reliably filter a history range.
+- Content protected against copying cannot be copied through the Bot API.
+- [Telegram normally keeps pending bot updates](https://core.telegram.org/bots/api#getting-updates) for no more than 24 hours. A long outage can leave a gap in live copying; use a known history range to recover it.
+- Sending to Telegram and saving progress in D1 are separate operations. A crash between them can cause a repeat. Exactly-once delivery is not promised.
 
-## Updating Your Deployment
+## Appearance
 
-When new features or bug fixes are released upstream, you can update your deployment in seconds:
+Open **Settings → Appearance** to choose from ten complete themes. They change navigation, spacing, cards, controls, and typography as well as colors. Your choice is saved on the current device.
+
+| Theme      | Layout and controls                                |
+| ---------- | -------------------------------------------------- |
+| Cloud      | Spacious blue sidebar and clear cards              |
+| Graphite   | Compact dark navigation and joined statistics      |
+| Paper      | Top navigation, serif headings, and separated rows |
+| Sage       | Floating green sidebar and rounded controls        |
+| Studio     | Top bar, square controls, and offset cards         |
+| Midnight   | Dark blue workspace with right-side navigation     |
+| Terracotta | Warm surfaces and generous spacing                 |
+| Contrast   | Black-and-white navigation with strong outlines    |
+| Terminal   | Monospaced text and compact rows                   |
+| Canvas     | Floating navigation and a desktop card grid        |
+
+All app icons and brand assets live in [`src/assets`](src/assets). Icons are SVG files rather than emoji or a remote icon service. Fonts use the device's installed system fonts.
+
+## Security
+
+- Protected API routes stay locked before setup and require a valid session afterward.
+- Session cookies are HttpOnly and SameSite; production cookies are Secure. Session tokens are not stored in browser local storage.
+- Passwords are hashed with PBKDF2. Login and setup attempts are rate limited in D1.
+- Password changes revoke existing sessions. Sign-out invalidates the current session.
+- Mutating browser requests require the app's origin and JSON content type.
+- Bot tokens remain server-side after they are saved. Saved configurations do not return them to the browser.
+- Failed database initialization returns an error instead of opening access.
+
+Bot tokens are stored in the private D1 database. Anyone with database administration access can read them. Keep your Cloudflare account and database exports private. The database ID in Wrangler identifies a resource; it is not an access credential.
+
+This is a single-owner dashboard, not a multi-user service. Do not share the admin password with untrusted users.
+
+## Local development
+
+Use Node.js 24 and npm:
 
 ```bash
-git pull https://github.com/iamLiquidX/telegram-clone-worker.git main
-git push origin main
-```
-
-Because Cloudflare Workers Builds is connected to your repository, pushing to `main` automatically triggers Cloudflare to build and redeploy the latest version to your live URL!
-
----
-
-## Manual CLI Setup & Local Development
-
-If you prefer to run or customize the project locally:
-
-### 1. Prerequisites
-- [Node.js](https://nodejs.org/) (v20 or higher)
-- [npm](https://www.npmjs.com/)
-- [Cloudflare Wrangler CLI](https://developers.cloudflare.com/workers/wrangler/) (`npm install -g wrangler`)
-
-### 2. Clone & Install
-```bash
-git clone https://github.com/iamLiquidX/telegram-clone-worker.git
-cd telegram-clone-worker
-npm install
-```
-
-### 3. Create Cloudflare D1 Database
-```bash
-npx wrangler d1 create telegram-clone-worker-db
-```
-Copy the `database_id` from Wrangler's output and update it in [`wrangler.jsonc`](file:///C:/Users/LiquidX/Documents/Snoop%20and%20Conf/project%20bot%20access/wrangler.jsonc):
-```jsonc
-"d1_databases": [
-  {
-    "binding": "DB",
-    "database_name": "telegram-clone-worker-db",
-    "database_id": "your-database-uuid-here"
-  }
-]
-```
-
-### 4. Apply Schema Migrations
-```bash
-# For local development
-npm run db:migrate:local
-
-# For remote Cloudflare database
-npm run db:migrate:remote
-```
-
-### 5. Run Locally
-```bash
+npm ci
 npm run dev
 ```
-Open [http://localhost:5173](http://localhost:5173) in your browser.
 
-### 6. Build & Deploy
+Open the local address printed by Vite. The Cloudflare Vite plugin runs the Worker and a local D1 database. Production data is not used.
+
+To retrieve a local setup code after opening the app:
+
 ```bash
-npm run deploy
+npx wrangler d1 execute telegram-clone-worker-db --local --command "SELECT value FROM app_settings WHERE key = 'setup_code';"
 ```
 
----
+| Command             | Purpose                                                 |
+| ------------------- | ------------------------------------------------------- |
+| `npm run dev`       | Run the app with the local Workers runtime and D1       |
+| `npm run typecheck` | Check client and Worker TypeScript                      |
+| `npm test`          | Run authentication, copying, and input regression tests |
+| `npm run build`     | Build the Worker and browser assets                     |
+| `npm run check`     | Run type checks, tests, and the production build        |
+| `npm run deploy`    | Build and deploy with Wrangler                          |
 
-## Available Scripts
+Historical SQL files remain in `migrations/` for reference. The app performs additive schema checks automatically. Do not replay historical migrations over an already bootstrapped database: older migrations include table rebuilds and removed features.
 
-| Command | Description |
-| :--- | :--- |
-| `npm run dev` | Start local Vite development server with mock API support. |
-| `npm run build` | Build SSR worker bundle and client production assets via Vite. |
-| `npm run typecheck` | Run full project reference TypeScript checks (`tsc -b`). |
-| `npm run deploy` | Build and deploy Worker + assets to Cloudflare (`vite build && wrangler deploy`). |
-| `npm run db:migrate:local` | Apply database migrations to local D1 SQLite. |
-| `npm run db:migrate:remote` | Apply database migrations to remote Cloudflare D1. |
+See [verification notes](docs/VERIFICATION.md) for the checks performed and the remaining live-service checks.
 
----
+## Updating
 
-## API & RPC Endpoints
+Push changes to the connected repository and let Cloudflare rebuild it. For manual deployment, run `npm run deploy`. Existing bots, tasks, progress, and saved configurations stay in D1.
 
-All API endpoints run under the `/api` route:
+Before a major update, take a D1 export or confirm that your account's database recovery is available. Never commit an export containing bot tokens or account settings.
 
-| Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/api/bots` | List all connected bots and their task workloads. |
-| `POST` | `/api/bots/verify` | Validate a bot token against Telegram's `getMe`. |
-| `DELETE` | `/api/bots/:id` | Disconnect a bot and cascade-remove its tasks. |
-| `GET` | `/api/tasks` | List all active, paused, and completed tasks. |
-| `POST` | `/api/bots/:botId/tasks` | Create a new backfill or live forwarding task. |
-| `GET` | `/api/tasks/:id` | Fetch task details, filter rules, and progress. |
-| `PATCH` | `/api/tasks/:id` | Update task label, scope, cursor, or pause/resume status. |
-| `DELETE` | `/api/tasks/:id` | Delete a task and its activity history. |
-| `GET` | `/api/tasks/:id/activity` | Stream recent activity logs and filter events. |
-| `POST` | `/api/bots/:botId/tasks/:taskId/test-copy` | Dispatch an ad-hoc test message copy. |
-| `GET` | `/api/saved-tasks` | List saved task templates. |
-| `POST` | `/api/saved-tasks` | Save a new task template. |
-| `GET` | `/api/health` | Service health check. |
+## Project layout
 
----
+```text
+src/assets/       SVG icons and logo
+src/client/       React interface and themes
+src/auth/         Passwords, sessions, and request protection
+src/db/           D1 initialization and queries
+src/routes/api/   Bots, chats, tasks, and saved configurations
+src/jobs/         Scheduled copying and live update processing
+src/telegram/     Telegram Bot API client
+src/shared/       Shared types and message filtering
+```
 
-## License & Credits
+## Credits
 
-- **Author**: [iamLiquidX](https://github.com/iamLiquidX)
-- **Support Chat**: [Telegram Community](https://t.me/liquidxprojects)
-- **Source Code**: [GitHub Repository](https://github.com/iamLiquidX/telegram-clone-worker)
-- **License**: [MIT](LICENSE)
+Original project by [iamLiquidX](https://github.com/iamLiquidX/telegram-clone-worker). Maintained in [vigarepo2/telegram-clone-worker](https://github.com/vigarepo2/telegram-clone-worker). Released under the [MIT license](LICENSE).

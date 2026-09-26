@@ -1,28 +1,28 @@
 import type { ErrorReason } from "../../shared/rpcTypes";
-
-const REASON_COPY: Record<ErrorReason, string> = {
-  insufficient_permissions: "The bot doesn't have the right permission for this in Telegram — check its admin rights in this chat.",
-  bot_not_in_chat: "The bot isn't a member of this chat (or was removed).",
-  rate_limited: "Telegram is rate-limiting this bot right now — it'll be retried automatically.",
-  invalid_request: "That request wasn't valid.",
-  unauthorized: "The bot's token has been revoked or is invalid — Telegram is rejecting every request from this bot.",
-  unknown: "Something went wrong.",
+import { Icon } from "./Icon";
+const help: Record<ErrorReason, string> = {
+  insufficient_permissions: "Check the bot’s admin permissions in Telegram.",
+  bot_not_in_chat: "Add the bot to this chat in Telegram, then try again.",
+  rate_limited:
+    "Telegram has asked this bot to wait. Copying will retry automatically.",
+  invalid_request: "Check the information below and try again.",
+  unauthorized:
+    "This bot token is no longer valid. Reconnect the bot with a current token.",
+  unknown: "This action could not be completed.",
 };
-
-export function PermissionErrorBanner({ reason, description }: { reason: ErrorReason; description: string }) {
+export function PermissionErrorBanner({
+  reason,
+  description,
+}: {
+  reason: ErrorReason;
+  description: string;
+}) {
   return (
-    <div className="permission-banner">
-      <span>⚠</span>
+    <div className="alert alert-error" role="alert">
+      <Icon name="alert" />
       <div>
-        <div>{REASON_COPY[reason]}</div>
-        <details style={{ marginTop: 4 }}>
-          <summary className="text-muted" style={{ cursor: "pointer", fontSize: 12 }}>
-            details
-          </summary>
-          <div className="text-mono text-muted" style={{ marginTop: 4 }}>
-            {description}
-          </div>
-        </details>
+        <p>{help[reason]}</p>
+        <p className="helper">{description}</p>
       </div>
     </div>
   );

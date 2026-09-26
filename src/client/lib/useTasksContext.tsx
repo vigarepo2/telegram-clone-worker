@@ -1,62 +1,49 @@
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { listAllTasks } from "./api";
+import { createContext, useContext, useMemo, type ReactNode } from "react";
 import type { TaskSummary } from "../../shared/rpcTypes";
-
-export function isTaskCompleted(t: TaskSummary): boolean {
+import { listAllTasks } from "./api";
+import { usePolling } from "./usePolling";
+export function isTaskCompleted(t: TaskSummary) {
   return (
-    !!t.stop_reason ||
-    t.backfill_status === "cancelled" ||
-    t.backfill_status === "failed" ||
-    (t.backfill_status === "complete" && !t.live_enabled)
+    !t.stop_reason &&
+    !t.live_enabled &&
+    (t.backfill_status === "cancelled" || t.backfill_status === "complete")
   );
 }
-
-export function isTaskActive(t: TaskSummary): boolean {
-  if (isTaskCompleted(t)) return false;
-  return Boolean(t.live_enabled || t.backfill_status === "running" || t.backfill_status === "pending");
-}
-
-export function isTaskPaused(t: TaskSummary): boolean {
-  if (isTaskCompleted(t)) return false;
+export function isTaskActive(t: TaskSummary) {
   return (
-    t.backfill_status === "paused" ||
-    (!t.live_enabled && t.backfill_status !== "running" && t.backfill_status !== "pending")
+    !isTaskCompleted(t) &&
+    !t.stop_reason &&
+    t.backfill_status !== "failed" &&
+    !!(
+      t.live_enabled ||
+      t.backfill_status === "running" ||
+      t.backfill_status === "pending"
+    )
   );
 }
-
-export interface TaskDisplayInfo {
-  title: string;
-  routeText: string;
-  isCustomLabel: boolean;
+export function isTaskPaused(t: TaskSummary) {
+  return !isTaskCompleted(t) && !isTaskActive(t);
 }
-
 export function getTaskDisplayInfo(t: {
   label?: string | null;
   source_chat_id: string;
   source_chat_title?: string | null;
   dest_chat_id: string;
   dest_chat_title?: string | null;
-}): TaskDisplayInfo {
-  const sourceText = (t.source_chat_title && t.source_chat_title.trim()) || t.source_chat_id;
-  const destText = (t.dest_chat_title && t.dest_chat_title.trim()) || t.dest_chat_id;
-  const routeText = `${sourceText} → ${destText}`;
-  const idRoute = `${t.source_chat_id} → ${t.dest_chat_id}`;
-
-  const label = (t.label ?? "").trim();
-  const isDefault =
-    !label ||
-    label === routeText ||
-    label === idRoute ||
-    label === `${sourceText} -> ${destText}` ||
-    label === `${t.source_chat_id} -> ${t.dest_chat_id}`;
-
-  return {
-    title: isDefault ? routeText : label,
+}) {
+  const source = t.source_chat_title?.trim() || t.source_chat_id,
+    dest = t.dest_chat_title?.trim() || t.dest_chat_id;
+  const routeText = `${source} → ${dest}`;
+  const label = t.label?.trim() || "";
+  const defaults = [
     routeText,
-    isCustomLabel: !isDefault,
-  };
+    `${t.source_chat_id} → ${t.dest_chat_id}`,
+    `${source} -> ${dest}`,
+    `${t.source_chat_id} -> ${t.dest_chat_id}`,
+  ];
+  const isCustomLabel = !!label && !defaults.includes(label);
+  return { title: isCustomLabel ? label : routeText, routeText, isCustomLabel };
 }
-
 interface TasksContextValue {
   tasks: TaskSummary[];
   activeTasks: TaskSummary[];
@@ -67,105 +54,41 @@ interface TasksContextValue {
   pausedCount: number;
   completedCount: number;
   loading: boolean;
+  error: string | null;
   refetch: () => Promise<void>;
 }
-
-const TasksContext = createContext<TasksContextValue | null>(null);
-
-const ACTIVE_POLL_INTERVAL_MS = 8_000;
-const IDLE_POLL_INTERVAL_MS = 15_000;
-
-export function TasksProvider({ children }: { children: React.ReactNode }) {
-  const [tasks, setTasks] = useState<TaskSummary[]>([]);
-  const [loading, setLoading] = useState(true);
-  const mountedRef = useRef(true);
-
-  const fetchTasks = async () => {
-    const res = await listAllTasks();
-    if (res.ok && mountedRef.current) {
-      setTasks(res.data);
-      setLoading(false);
-    }
-  };
-
-  const activeTasks = useMemo(() => {
-    return tasks.filter(isTaskActive);
-  }, [tasks]);
-
-  const pausedTasks = useMemo(() => {
-    return tasks.filter(isTaskPaused);
-  }, [tasks]);
-
-  const completedTasks = useMemo(() => {
-    return tasks.filter(isTaskCompleted);
-  }, [tasks]);
-
-  const liveCount = useMemo(() => {
-    return tasks.filter((t) => t.live_enabled && !t.stop_reason).length;
-  }, [tasks]);
-
-  const activeCount = useMemo(() => activeTasks.length, [activeTasks]);
-  const pausedCount = useMemo(() => pausedTasks.length, [pausedTasks]);
-  const completedCount = useMemo(() => completedTasks.length, [completedTasks]);
-
-  useEffect(() => {
-    mountedRef.current = true;
-    fetchTasks();
-
-    let timeoutId: number | undefined;
-
-    const scheduleNext = () => {
-      // Dynamic interval: poll faster when active tasks are running, slower when idle
-      const interval = activeTasks.length > 0 ? ACTIVE_POLL_INTERVAL_MS : IDLE_POLL_INTERVAL_MS;
-      timeoutId = window.setTimeout(async () => {
-        if (document.visibilityState === "visible") {
-          await fetchTasks();
-        }
-        scheduleNext();
-      }, interval);
-    };
-
-    scheduleNext();
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        fetchTasks();
-      }
-    };
-
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-
-    return () => {
-      mountedRef.current = false;
-      if (timeoutId) clearTimeout(timeoutId);
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [activeTasks.length]);
-
+const Context = createContext<TasksContextValue | null>(null);
+export function TasksProvider({ children }: { children: ReactNode }) {
+  const { data, loading, error, refetch } = usePolling(listAllTasks, 8000);
+  const tasks = data ?? [];
+  const groups = useMemo(
+    () => ({
+      activeTasks: tasks.filter(isTaskActive),
+      pausedTasks: tasks.filter(isTaskPaused),
+      completedTasks: tasks.filter(isTaskCompleted),
+    }),
+    [data],
+  );
   return (
-    <TasksContext.Provider
+    <Context.Provider
       value={{
         tasks,
-        activeTasks,
-        pausedTasks,
-        completedTasks,
-        activeCount,
-        liveCount,
-        pausedCount,
-        completedCount,
+        ...groups,
+        activeCount: groups.activeTasks.length,
+        pausedCount: groups.pausedTasks.length,
+        completedCount: groups.completedTasks.length,
+        liveCount: tasks.filter((t) => t.live_enabled && !t.stop_reason).length,
         loading,
-        refetch: fetchTasks,
+        error,
+        refetch,
       }}
     >
       {children}
-    </TasksContext.Provider>
+    </Context.Provider>
   );
 }
-
-export function useTasks(): TasksContextValue {
-  const ctx = useContext(TasksContext);
-  if (!ctx) {
-    throw new Error("useTasks must be used within a TasksProvider");
-  }
-  return ctx;
+export function useTasks() {
+  const value = useContext(Context);
+  if (!value) throw new Error("Tasks are unavailable.");
+  return value;
 }

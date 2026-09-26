@@ -1,44 +1,73 @@
-import { createContext, useCallback, useContext, useRef, useState, type ReactNode } from "react";
-
-interface ToastEntry {
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { Icon } from "./Icon";
+type ToastEntry = {
   id: number;
-  kind: "success" | "error";
+  kind: "success" | "error" | "info";
   message: string;
+};
+const Context = createContext<{
+  show: (kind: ToastEntry["kind"], message: string) => void;
+} | null>(null);
+export function useToast() {
+  const value = useContext(Context);
+  if (!value) throw new Error("Notifications are unavailable.");
+  return value;
 }
-
-interface ToastContextValue {
-  show: (kind: "success" | "error", message: string) => void;
-}
-
-const ToastContext = createContext<ToastContextValue | null>(null);
-
-export function useToast(): ToastContextValue {
-  const ctx = useContext(ToastContext);
-  if (!ctx) throw new Error("useToast must be used within ToastProvider");
-  return ctx;
-}
-
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<ToastEntry[]>([]);
-  const nextId = useRef(0);
-
-  const show = useCallback((kind: "success" | "error", message: string) => {
-    const id = nextId.current++;
-    setToasts((t) => [...t, { id, kind, message }]);
-    setTimeout(() => setToasts((t) => t.filter((x) => x.id !== id)), 4000);
+  const next = useRef(0);
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
+  useEffect(() => () => timers.current.forEach(clearTimeout), []);
+  const show = useCallback((kind: ToastEntry["kind"], message: string) => {
+    const id = next.current++;
+    setToasts((list) => [...list.slice(-3), { id, kind, message }]);
+    timers.current.push(
+      setTimeout(
+        () => setToasts((list) => list.filter((item) => item.id !== id)),
+        kind === "error" ? 8000 : 4500,
+      ),
+    );
   }, []);
-
   return (
-    <ToastContext.Provider value={{ show }}>
+    <Context.Provider value={{ show }}>
       {children}
-      <div className="toast-stack">
-        {toasts.map((t) => (
-          <div key={t.id} className={`toast ${t.kind}`}>
-            <span className="status-dot" />
-            {t.message}
+      <div className="toast-stack" aria-live="polite">
+        {toasts.map((item) => (
+          <div
+            className={`toast ${item.kind}`}
+            key={item.id}
+            role={item.kind === "error" ? "alert" : "status"}
+          >
+            <Icon
+              name={
+                item.kind === "success"
+                  ? "check-circle"
+                  : item.kind === "info"
+                    ? "info"
+                    : "alert"
+              }
+            />
+            <span>{item.message}</span>
+            <button
+              className="icon-button"
+              aria-label="Dismiss notification"
+              onClick={() =>
+                setToasts((list) => list.filter((t) => t.id !== item.id))
+              }
+            >
+              <Icon name="close" size={16} />
+            </button>
           </div>
         ))}
       </div>
-    </ToastContext.Provider>
+    </Context.Provider>
   );
 }

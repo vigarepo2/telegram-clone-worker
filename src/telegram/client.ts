@@ -28,15 +28,58 @@ export interface CopyResult {
 export class TelegramClient {
   constructor(private token: string) {}
 
-  private async call<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
+  private async call<T>(
+    method: string,
+    params: Record<string, unknown> = {},
+  ): Promise<T> {
     const url = `${API_ROOT}/bot${this.token}/${method}`;
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(params),
-    });
-    const body = (await res.json()) as TelegramApiResponse<T>;
-    if (!body.ok) throw new TelegramApiError(body);
+    let res: Response;
+    try {
+      res = await fetch(url, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(params),
+        signal: AbortSignal.timeout(
+          method.startsWith("copy") ? 55_000 : 15_000,
+        ),
+      });
+    } catch {
+      // Never expose a fetch error: runtimes may include the URL and bot token.
+      throw new TelegramApiError({
+        ok: false,
+        error_code: 503,
+        description: "Telegram could not be reached. Try again shortly.",
+      });
+    }
+    let body: TelegramApiResponse<T>;
+    try {
+      body = (await res.json()) as TelegramApiResponse<T>;
+    } catch {
+      throw new TelegramApiError({
+        ok: false,
+        error_code: 502,
+        description:
+          "Telegram returned an unreadable response. Try again shortly.",
+      });
+    }
+    if (!body || typeof body !== "object" || typeof body.ok !== "boolean") {
+      throw new TelegramApiError({
+        ok: false,
+        error_code: 502,
+        description: "Telegram returned an unexpected response.",
+      });
+    }
+    if (!body.ok)
+      throw new TelegramApiError({
+        ...body,
+        error_code: Number.isInteger(body.error_code)
+          ? body.error_code
+          : res.status,
+        description:
+          typeof body.description === "string"
+            ? body.description.replaceAll(this.token, "[redacted]")
+            : "Telegram request failed.",
+      });
     return body.result;
   }
 
@@ -54,7 +97,9 @@ export class TelegramClient {
   }
 
   deleteWebhook(dropPendingUpdates = false): Promise<true> {
-    return this.call("deleteWebhook", { drop_pending_updates: dropPendingUpdates });
+    return this.call("deleteWebhook", {
+      drop_pending_updates: dropPendingUpdates,
+    });
   }
 
   getWebhookInfo(): Promise<{
@@ -71,7 +116,13 @@ export class TelegramClient {
     return this.call("getWebhookInfo");
   }
 
-  getUpdates(params: { offset?: number; limit?: number; allowed_updates?: string[] } = {}): Promise<TelegramUpdate[]> {
+  getUpdates(
+    params: {
+      offset?: number;
+      limit?: number;
+      allowed_updates?: string[];
+    } = {},
+  ): Promise<TelegramUpdate[]> {
     return this.call("getUpdates", params);
   }
 
@@ -83,28 +134,50 @@ export class TelegramClient {
     return this.call("getChatMemberCount", { chat_id: chatId });
   }
 
-  getChatMember(chatId: string | number, userId: number): Promise<TelegramChatMember> {
+  getChatMember(
+    chatId: string | number,
+    userId: number,
+  ): Promise<TelegramChatMember> {
     return this.call("getChatMember", { chat_id: chatId, user_id: userId });
   }
 
-  getChatAdministrators(chatId: string | number): Promise<TelegramChatMember[]> {
+  getChatAdministrators(
+    chatId: string | number,
+  ): Promise<TelegramChatMember[]> {
     return this.call("getChatAdministrators", { chat_id: chatId });
   }
 
-  createChatInviteLink(chatId: string | number, name?: string): Promise<TelegramChatInviteLink> {
+  createChatInviteLink(
+    chatId: string | number,
+    name?: string,
+  ): Promise<TelegramChatInviteLink> {
     return this.call("createChatInviteLink", { chat_id: chatId, name });
   }
 
-  revokeChatInviteLink(chatId: string | number, inviteLink: string): Promise<TelegramChatInviteLink> {
-    return this.call("revokeChatInviteLink", { chat_id: chatId, invite_link: inviteLink });
+  revokeChatInviteLink(
+    chatId: string | number,
+    inviteLink: string,
+  ): Promise<TelegramChatInviteLink> {
+    return this.call("revokeChatInviteLink", {
+      chat_id: chatId,
+      invite_link: inviteLink,
+    });
   }
 
   exportChatInviteLink(chatId: string | number): Promise<string> {
     return this.call("exportChatInviteLink", { chat_id: chatId });
   }
 
-  promoteChatMember(chatId: string | number, userId: number, rights: PromoteRights): Promise<true> {
-    return this.call("promoteChatMember", { chat_id: chatId, user_id: userId, ...rights });
+  promoteChatMember(
+    chatId: string | number,
+    userId: number,
+    rights: PromoteRights,
+  ): Promise<true> {
+    return this.call("promoteChatMember", {
+      chat_id: chatId,
+      user_id: userId,
+      ...rights,
+    });
   }
 
   banChatMember(chatId: string | number, userId: number): Promise<true> {
@@ -112,7 +185,11 @@ export class TelegramClient {
   }
 
   unbanChatMember(chatId: string | number, userId: number): Promise<true> {
-    return this.call("unbanChatMember", { chat_id: chatId, user_id: userId, only_if_banned: true });
+    return this.call("unbanChatMember", {
+      chat_id: chatId,
+      user_id: userId,
+      only_if_banned: true,
+    });
   }
 
   sendMessage(chatId: string | number, text: string): Promise<TelegramMessage> {
@@ -120,15 +197,34 @@ export class TelegramClient {
   }
 
   deleteMessage(chatId: string | number, messageId: number): Promise<true> {
-    return this.call("deleteMessage", { chat_id: chatId, message_id: messageId });
+    return this.call("deleteMessage", {
+      chat_id: chatId,
+      message_id: messageId,
+    });
   }
 
-  copyMessage(destChatId: string | number, sourceChatId: string | number, messageId: number): Promise<CopyResult> {
-    return this.call("copyMessage", { chat_id: destChatId, from_chat_id: sourceChatId, message_id: messageId });
+  copyMessage(
+    destChatId: string | number,
+    sourceChatId: string | number,
+    messageId: number,
+  ): Promise<CopyResult> {
+    return this.call("copyMessage", {
+      chat_id: destChatId,
+      from_chat_id: sourceChatId,
+      message_id: messageId,
+    });
   }
 
-  copyMessages(destChatId: string | number, sourceChatId: string | number, messageIds: number[]): Promise<CopyResult[]> {
-    return this.call("copyMessages", { chat_id: destChatId, from_chat_id: sourceChatId, message_ids: messageIds });
+  copyMessages(
+    destChatId: string | number,
+    sourceChatId: string | number,
+    messageIds: number[],
+  ): Promise<CopyResult[]> {
+    return this.call("copyMessages", {
+      chat_id: destChatId,
+      from_chat_id: sourceChatId,
+      message_ids: messageIds,
+    });
   }
 }
 

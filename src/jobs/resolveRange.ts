@@ -1,3 +1,4 @@
+import { TelegramApiError } from "../telegram/errors";
 import { TelegramClient } from "../telegram/client";
 
 export interface ResolvedRange {
@@ -10,7 +11,11 @@ export interface ResolvedRange {
  * highest message id (the returned message_id is always one greater than
  * the last real message), then best-effort delete it so it doesn't
  * clutter the chat. Deletion failure is logged, not fatal. */
-export async function resolveLastN(client: TelegramClient, sourceChatId: string, n: number): Promise<ResolvedRange> {
+export async function resolveLastN(
+  client: TelegramClient,
+  sourceChatId: string,
+  n: number,
+): Promise<ResolvedRange> {
   const probe = await client.sendMessage(sourceChatId, ".");
   let cleanupOk = true;
   try {
@@ -19,5 +24,15 @@ export async function resolveLastN(client: TelegramClient, sourceChatId: string,
     cleanupOk = false;
   }
   const latestRealId = probe.message_id - 1;
-  return { startId: Math.max(1, latestRealId - n + 1), endId: latestRealId, cleanupOk };
+  if (latestRealId < 1)
+    throw new TelegramApiError({
+      ok: false,
+      error_code: 400,
+      description: "This source has no earlier messages to copy.",
+    });
+  return {
+    startId: Math.max(1, latestRealId - n + 1),
+    endId: latestRealId,
+    cleanupOk,
+  };
 }

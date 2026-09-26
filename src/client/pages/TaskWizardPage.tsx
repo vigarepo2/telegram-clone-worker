@@ -1,1142 +1,1105 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { usePolling } from "../lib/usePolling";
+import { useTasks } from "../lib/useTasksContext";
+import { navigate } from "../lib/router";
 import { useToast } from "../components/Toast";
 import { PageHero } from "../components/PageHero";
+import { Icon } from "../components/Icon";
 import { CapabilityChecklist } from "../components/CapabilityChecklist";
-import { PermissionErrorBanner } from "../components/PermissionErrorBanner";
-import { BotActivityModal } from "../components/BotActivityModal";
-import { navigate } from "../lib/router";
-import { getTaskDisplayInfo } from "../lib/useTasksContext";
+import { ChatTools } from "../components/ChatTools";
+import { Modal } from "../components/Modal";
+import { SCOPE_LABELS } from "./TasksPage";
+import { normalizeChatInput } from "../../shared/chatInput";
 import type {
   BotSummary,
-  BotVerifyResult,
   ChatLookupResult,
-  ErrorReason,
-  SavedTaskWithToken,
+  SavedTaskSummary,
   TaskScope,
   TaskSummary,
 } from "../../shared/rpcTypes";
 
-type BackfillMode = "range" | "lastN";
-
+type SavedSetup = SavedTaskSummary & { existing_bot_id: string | null };
+const steps = ["Bot", "Chats", "Messages", "Review"];
+const positive = (value: string) =>
+  /^\d+$/.test(value) &&
+  Number.isSafeInteger(Number(value)) &&
+  Number(value) > 0;
 export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
+  const {
+    data: bots,
+    loading: botsLoading,
+    error: botsError,
+    refetch: refetchBots,
+  } = usePolling(() => api.get<BotSummary[]>("/api/bots"), 30000);
+  const tasks = useTasks();
   const toast = useToast();
-  const { data: bots } = usePolling(() => api.get<BotSummary[]>("/api/bots"), 15000);
-
-  // Step 1: bot
-  const [selectedBotId, setSelectedBotId] = useState<string>("");
-  const [newToken, setNewToken] = useState("");
-  const [botError, setBotError] = useState<string | null>(null);
-  const [savingBot, setSavingBot] = useState(false);
-  const [pendingBot, setPendingBot] = useState<{ token: string; bot_id: number; bot_username: string } | null>(null);
-  const [botActiveTasks, setBotActiveTasks] = useState<TaskSummary[] | null>(null);
-  const [loadingBotTasks, setLoadingBotTasks] = useState(false);
-  const [showActivityModal, setShowActivityModal] = useState(false);
-
-  function handleClearBot() {
-    setSelectedBotId("");
-    setPendingBot(null);
-    setBotActiveTasks(null);
-    setNewToken("");
-    setBotError(null);
-  }
-
-  // Step 2: source chat
-  const [sourceChatId, setSourceChatId] = useState("");
-  const [sourceLookup, setSourceLookup] = useState<ChatLookupResult | null>(null);
-  const [sourceError, setSourceError] = useState<{ reason: ErrorReason; description: string } | null>(null);
-  const [lookingUpSource, setLookingUpSource] = useState(false);
-  const [showAdminTools, setShowAdminTools] = useState(false);
-  const [userIdInput, setUserIdInput] = useState("");
-  const [inviteLink, setInviteLink] = useState<string | null>(null);
-  const [revokeInviteLinkInput, setRevokeInviteLinkInput] = useState("");
-
-  // Step 3: destination + config
-  const [destChatId, setDestChatId] = useState("");
-  const [destLookup, setDestLookup] = useState<ChatLookupResult | null>(null);
-  const [destError, setDestError] = useState<{ reason: ErrorReason; description: string } | null>(null);
-  const [lookingUpDest, setLookingUpDest] = useState(false);
+  const [step, setStep] = useState(0);
+  const [botId, setBotId] = useState("");
+  const [token, setToken] = useState("");
+  const [connectNew, setConnectNew] = useState(false);
+  const [source, setSource] = useState("");
+  const [dest, setDest] = useState("");
+  const [sourceChat, setSourceChat] = useState<ChatLookupResult | null>(null);
+  const [destChat, setDestChat] = useState<ChatLookupResult | null>(null);
   const [scope, setScope] = useState<TaskScope>("live");
-  const [backfillMode, setBackfillMode] = useState<BackfillMode>("lastN");
-  const [startId, setStartId] = useState("");
-  const [endId, setEndId] = useState("");
-  const [n, setN] = useState("100");
-  const [duplicate, setDuplicate] = useState<TaskSummary | null>(null);
-  const [creating, setCreating] = useState(false);
-  const [lastSaveTemplate, setLastSaveTemplate] = useState(false);
-  const [testMessageId, setTestMessageId] = useState("");
-  const [testCopyResult, setTestCopyResult] = useState<string | null>(null);
-  const [testingCopy, setTestingCopy] = useState(false);
-  const [enableFilters, setEnableFilters] = useState(false);
-  const [filterMediaTypes, setFilterMediaTypes] = useState<string[]>(["document", "video"]);
-  const [minFileSizeMb, setMinFileSizeMb] = useState("");
-  const [maxFileSizeMb, setMaxFileSizeMb] = useState("");
-
-  const selectedBot = bots?.find((b) => b.id === selectedBotId);
-  const hasBot = !!selectedBotId || !!pendingBot;
-  const wantsBackfill = scope === "live_and_backfill" || scope === "backfill_only";
-  const runningBackfillTasks = (botActiveTasks ?? []).filter((t) => t.backfill_status === "running");
-  const hasRunningBackfill = runningBackfillTasks.length > 0;
-
-  function botQuery(): string {
-    if (pendingBot) return `token=${encodeURIComponent(pendingBot.token)}&botTelegramId=${pendingBot.bot_id}`;
-    return `botId=${selectedBotId}`;
-  }
-
-  async function handleSelectBot(botId: string) {
-    setSelectedBotId(botId);
-    setPendingBot(null);
-    setBotActiveTasks(null);
-    setNewToken("");
-    setBotError(null);
-    if (!botId) return;
-    setLoadingBotTasks(true);
-    const res = await api.get<TaskSummary[]>(`/api/bots/${botId}/tasks`);
-    setLoadingBotTasks(false);
-    if (res.ok) {
-      const active = res.data.filter(
-        (t) => t.live_enabled || t.backfill_status === "running" || t.backfill_status === "paused",
-      );
-      setBotActiveTasks(active);
-    } else {
-      setBotActiveTasks([]);
-    }
-  }
-
+  const [mode, setMode] = useState<"range" | "lastN">("range");
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [count, setCount] = useState("100");
+  const [label, setLabel] = useState("");
+  const [saveSetup, setSaveSetup] = useState(false);
+  const [filters, setFilters] = useState(false);
+  const [media, setMedia] = useState<string[]>([]);
+  const [minSize, setMinSize] = useState("");
+  const [maxSize, setMaxSize] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const [notice, setNotice] = useState("");
+  const [loadingSetup, setLoadingSetup] = useState(!!fromSavedId);
+  const [duplicate, setDuplicate] = useState<string | null>(null);
+  const [confirmTest, setConfirmTest] = useState(false);
+  const [testId, setTestId] = useState("");
+  const [testResult, setTestResult] = useState("");
+  const generation = useRef(0);
+  const selectedBot = bots?.find((bot) => bot.id === botId);
+  const history = scope !== "live";
+  const sourceReady =
+    sourceChat &&
+    ["creator", "administrator", "member"].includes(sourceChat.botStatus);
+  const destReady = destChat?.capabilities.find(
+    (c) => c.key === "send_message",
+  )?.available;
   useEffect(() => {
     if (!fromSavedId) return;
-    (async () => {
-      const res = await api.get<SavedTaskWithToken>(`/api/saved-tasks/${fromSavedId}`);
-      if (!res.ok) {
-        toast.show("error", res.description);
-        return;
-      }
-      const s = res.data;
-      setNewToken(s.bot_token);
-      setSourceChatId(s.source_chat_id);
-      setDestChatId(s.dest_chat_id);
-      setScope(s.scope);
-      if (s.backfill_mode) setBackfillMode(s.backfill_mode);
-      if (s.backfill_mode === "range") {
-        setStartId(s.start_id != null ? String(s.start_id) : "");
-        setEndId(s.end_id != null ? String(s.end_id) : "");
-      } else if (s.backfill_mode === "lastN" && s.n != null) {
-        setN(String(s.n));
-      }
-      if (s.filter_media_types) {
-        setEnableFilters(true);
-        setFilterMediaTypes(s.filter_media_types.split(",").map((m) => m.trim()).filter(Boolean));
-      }
-      if (s.filter_min_size_bytes != null) {
-        setEnableFilters(true);
-        setMinFileSizeMb(String(Math.round(s.filter_min_size_bytes / (1024 * 1024))));
-      }
-      if (s.filter_max_size_bytes != null) {
-        setEnableFilters(true);
-        setMaxFileSizeMb(String(Math.round(s.filter_max_size_bytes / (1024 * 1024))));
-      }
-      toast.show("success", "Prefilled from saved template — review each step and continue manually.");
-    })();
-  }, [fromSavedId]);
-
-  async function verifyNewBot() {
-    if (!newToken.trim()) return;
-    setBotError(null);
-    setSavingBot(true);
-    const res = await api.post<BotVerifyResult>("/api/bots/verify", { token: newToken.trim() });
-    setSavingBot(false);
-    if (!res.ok) {
-      setBotError(res.description);
-      return;
-    }
-    toast.show("success", `Verified @${res.data.bot_username}`);
-    setSelectedBotId("");
-    setPendingBot({ token: newToken.trim(), bot_id: res.data.bot_id, bot_username: res.data.bot_username });
-    setBotActiveTasks(res.data.active_tasks ?? []);
-    setNewToken("");
-  }
-
-  async function lookupSource() {
-    if (!hasBot || !sourceChatId) return;
-    setLookingUpSource(true);
-    setSourceError(null);
-    setSourceLookup(null);
-    const res = await api.get<ChatLookupResult>(`/api/chats/${encodeURIComponent(sourceChatId)}?${botQuery()}`);
-    setLookingUpSource(false);
-    if (res.ok) setSourceLookup(res.data);
-    else setSourceError({ reason: res.reason, description: res.description });
-  }
-
-  async function lookupDest() {
-    if (!hasBot || !destChatId) return;
-    setLookingUpDest(true);
-    setDestError(null);
-    setDestLookup(null);
-    const res = await api.get<ChatLookupResult>(`/api/chats/${encodeURIComponent(destChatId)}?${botQuery()}`);
-    setLookingUpDest(false);
-    if (res.ok) setDestLookup(res.data);
-    else setDestError({ reason: res.reason, description: res.description });
-  }
-
-  async function generateInviteLink() {
-    const res = await api.post<{ invite_link: string }>(`/api/chats/${encodeURIComponent(sourceChatId)}/invite-link?${botQuery()}`);
-    if (res.ok) setInviteLink(res.data.invite_link);
-    else toast.show("error", res.description);
-  }
-
-  async function revokeInviteLink() {
-    if (!revokeInviteLinkInput) return;
-    const res = await api.post(`/api/chats/${encodeURIComponent(sourceChatId)}/revoke-invite-link?${botQuery()}`, {
-      inviteLink: revokeInviteLinkInput,
-    });
-    if (res.ok) {
-      toast.show("success", "Invite link revoked");
-      setRevokeInviteLinkInput("");
-    } else toast.show("error", res.description);
-  }
-
-  async function banUser() {
-    const uid = Number(userIdInput);
-    if (!uid) return;
-    const res = await api.post(`/api/chats/${encodeURIComponent(sourceChatId)}/ban?${botQuery()}`, { userId: uid });
-    toast.show(res.ok ? "success" : "error", res.ok ? "User banned" : res.description);
-  }
-
-  async function unbanUser() {
-    const uid = Number(userIdInput);
-    if (!uid) return;
-    const res = await api.post(`/api/chats/${encodeURIComponent(sourceChatId)}/unban?${botQuery()}`, { userId: uid });
-    toast.show(res.ok ? "success" : "error", res.ok ? "User unbanned" : res.description);
-  }
-
-  async function promoteUser() {
-    const uid = Number(userIdInput);
-    if (!uid) return;
-    const res = await api.post(`/api/chats/${encodeURIComponent(sourceChatId)}/promote?${botQuery()}`, {
-      userId: uid,
-      rights: { can_delete_messages: true, can_invite_users: true, can_restrict_members: true },
-    });
-    toast.show(res.ok ? "success" : "error", res.ok ? "User promoted" : res.description);
-  }
-
-  async function sendTestMessage() {
-    const res = await api.post(`/api/chats/${encodeURIComponent(sourceChatId)}/send-test-message?${botQuery()}`, {
-      text: "Test message from Telegram Clone Worker",
-    });
-    toast.show(res.ok ? "success" : "error", res.ok ? "Test message sent" : res.description);
-  }
-
-  async function checkLatestId() {
-    const res = await api.get<{ latestMessageId: number; cleanupOk: boolean }>(
-      `/api/chats/${encodeURIComponent(sourceChatId)}/latest-message-id?${botQuery()}`,
-    );
-    if (res.ok) toast.show("success", `Latest message id: ${res.data.latestMessageId}`);
-    else toast.show("error", res.description);
-  }
-
-  async function runTestCopy() {
-    if (!destChatId) return;
-    setTestingCopy(true);
-    setTestCopyResult(null);
-    const res = await api.post<{ message_id: number }>(`/api/chats/${encodeURIComponent(sourceChatId)}/test-copy?${botQuery()}`, {
-      destChatId,
-      messageId: testMessageId ? Number(testMessageId) : undefined,
-    });
-    setTestingCopy(false);
-    setTestCopyResult(res.ok ? `Sent as message ${res.data.message_id} in destination` : `Failed: ${res.description}`);
-  }
-
-  async function createTask(allowDuplicate = false, saveTemplate = false) {
-    if (!sourceLookup || !destLookup) return;
-    setLastSaveTemplate(saveTemplate);
-    setCreating(true);
-    setDuplicate(null);
-    const wantsLive = scope === "live" || scope === "live_and_backfill";
-    const minBytes = wantsLive && enableFilters && minFileSizeMb ? Math.round(Number(minFileSizeMb) * 1024 * 1024) : undefined;
-    const maxBytes = wantsLive && enableFilters && maxFileSizeMb ? Math.round(Number(maxFileSizeMb) * 1024 * 1024) : undefined;
-    const mediaTypesStr = wantsLive && enableFilters && filterMediaTypes.length > 0 ? filterMediaTypes.join(",") : undefined;
-
-    const body = {
-      botToken: pendingBot?.token,
-      sourceChatId: String(sourceLookup.chat.id),
-      sourceChatTitle: sourceLookup.chat.title,
-      destChatId: String(destLookup.chat.id),
-      destChatTitle: destLookup.chat.title,
-      destChatType: destLookup.chat.type,
-      scope,
-      backfillMode: wantsBackfill ? backfillMode : undefined,
-      startId: wantsBackfill && backfillMode === "range" ? Number(startId) : undefined,
-      endId: wantsBackfill && backfillMode === "range" ? Number(endId) : undefined,
-      n: wantsBackfill && backfillMode === "lastN" ? Number(n) : undefined,
-      allowDuplicate,
-      saveTemplate,
-      filterMediaTypes: mediaTypesStr,
-      filterMinSizeBytes: minBytes,
-      filterMaxSizeBytes: maxBytes,
+    let cancelled = false;
+    void api
+      .get<SavedSetup>(`/api/saved-tasks/${fromSavedId}`)
+      .then((result) => {
+        if (cancelled) return;
+        setLoadingSetup(false);
+        if (!result.ok) {
+          setError(result.description);
+          return;
+        }
+        const saved = result.data;
+        setBotId(saved.existing_bot_id ?? "");
+        setSource(saved.source_chat_id);
+        setDest(saved.dest_chat_id);
+        setScope(saved.scope);
+        setMode(saved.backfill_mode ?? "range");
+        setStart(saved.start_id == null ? "" : String(saved.start_id));
+        setEnd(saved.end_id == null ? "" : String(saved.end_id));
+        setCount(String(saved.n ?? 100));
+        setFilters(
+          !!(
+            saved.filter_media_types ||
+            saved.filter_min_size_bytes ||
+            saved.filter_max_size_bytes
+          ),
+        );
+        setMedia(saved.filter_media_types?.split(",") ?? []);
+        setMinSize(
+          saved.filter_min_size_bytes == null
+            ? ""
+            : String(saved.filter_min_size_bytes / 1048576),
+        );
+        setMaxSize(
+          saved.filter_max_size_bytes == null
+            ? ""
+            : String(saved.filter_max_size_bytes / 1048576),
+        );
+        setNotice(
+          saved.existing_bot_id
+            ? "Setup loaded. Check the chats and review before starting."
+            : "Setup loaded. Reconnect its bot, or choose another bot, to continue.",
+        );
+      });
+    return () => {
+      cancelled = true;
     };
-    const botPathId = pendingBot ? "new" : selectedBotId;
-    const res = await api.post<TaskSummary>(`/api/bots/${botPathId}/tasks`, body);
-    setCreating(false);
-    if (res.ok) {
-      toast.show("success", "Task created");
-      navigate(`task/${res.data.id}`);
-      return;
-    }
-    const duplicateTaskId = (res as { duplicateTaskId?: string }).duplicateTaskId;
-    if (duplicateTaskId) {
-      const dup = await api.get<TaskSummary[]>(`/api/bots/${selectedBotId}/tasks`);
-      if (dup.ok) {
-        const found = dup.data.find((t) => t.id === duplicateTaskId);
-        if (found) setDuplicate(found);
-      }
-      return;
-    }
-    toast.show("error", res.description);
+  }, [fromSavedId]);
+  function resetChats() {
+    generation.current++;
+    setSourceChat(null);
+    setDestChat(null);
+    setError("");
   }
-
+  async function connect() {
+    setBusy(true);
+    setError("");
+    const result = await api.post<BotSummary>("/api/bots", {
+      token: token.trim(),
+    });
+    setBusy(false);
+    if (!result.ok) {
+      setError(result.description);
+      return;
+    }
+    resetChats();
+    setBotId(result.data.id);
+    setToken("");
+    setConnectNew(false);
+    await refetchBots();
+    toast.show("success", `Connected @${result.data.bot_username}.`);
+  }
+  async function checkChats() {
+    const normalizedSource = normalizeChatInput(source);
+    const normalizedDest = normalizeChatInput(dest);
+    if (!normalizedSource.ok || !normalizedDest.ok) {
+      setError(
+        [
+          !normalizedSource.ok ? `Source: ${normalizedSource.error}` : "",
+          !normalizedDest.ok ? `Destination: ${normalizedDest.error}` : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+      return;
+    }
+    setSource(normalizedSource.value);
+    setDest(normalizedDest.value);
+    const key = ++generation.current;
+    setBusy(true);
+    setError("");
+    const query = `?botId=${encodeURIComponent(botId)}`;
+    const results = await Promise.all([
+      api.get<ChatLookupResult>(
+        `/api/chats/${encodeURIComponent(normalizedSource.value)}${query}`,
+      ),
+      api.get<ChatLookupResult>(
+        `/api/chats/${encodeURIComponent(normalizedDest.value)}${query}`,
+      ),
+    ]);
+    if (key !== generation.current) {
+      setBusy(false);
+      return;
+    }
+    setBusy(false);
+    const [first, second] = results;
+    setSourceChat(first.ok ? first.data : null);
+    setDestChat(second.ok ? second.data : null);
+    if (!first.ok || !second.ok) {
+      setError(
+        [
+          !first.ok ? `Source: ${first.description}` : "",
+          !second.ok ? `Destination: ${second.description}` : "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      );
+      return;
+    }
+    if (first.data.chat.id === second.data.chat.id) {
+      setDestChat(null);
+      setError("Choose different source and destination chats.");
+      return;
+    }
+    if (
+      !["creator", "administrator", "member"].includes(first.data.botStatus)
+    ) {
+      setError(
+        "Add the bot to the source chat and remove any membership restriction, then check again.",
+      );
+      return;
+    }
+    if (
+      !second.data.capabilities.find((c) => c.key === "send_message")?.available
+    ) {
+      setError(
+        "Give your bot permission to post in the destination, then check again.",
+      );
+      return;
+    }
+  }
+  function validateMessages() {
+    if (
+      history &&
+      mode === "range" &&
+      (!positive(start) || !positive(end) || Number(start) > Number(end))
+    )
+      return "Enter valid start and end message IDs, with the end at or after the start.";
+    if (
+      history &&
+      mode === "lastN" &&
+      (!positive(count) || Number(count) > 1000000)
+    )
+      return "Enter a number of recent message IDs from 1 to 1,000,000.";
+    if (
+      history &&
+      mode === "lastN" &&
+      !sourceChat?.capabilities.find((c) => c.key === "send_message")?.available
+    )
+      return "Finding recent messages requires permission to post in the source. Use a message range instead.";
+    if (filters && scope !== "backfill_only") {
+      if (
+        [minSize, maxSize].some(
+          (value) =>
+            value !== "" &&
+            (!Number.isFinite(Number(value)) || Number(value) < 0),
+        )
+      )
+        return "File sizes must be zero or a positive number.";
+      if (minSize !== "" && maxSize !== "" && Number(minSize) > Number(maxSize))
+        return "Maximum file size must be at least the minimum size.";
+    }
+    return "";
+  }
+  async function create(allowDuplicate = false) {
+    if (!sourceChat || !destChat || !botId) return;
+    const invalid = validateMessages();
+    if (invalid) {
+      setError(invalid);
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const result = await api.post<TaskSummary>(`/api/bots/${botId}/tasks`, {
+      sourceChatId: String(sourceChat.chat.id),
+      destChatId: String(destChat.chat.id),
+      scope,
+      label: label.trim() || undefined,
+      backfillMode: history ? mode : undefined,
+      startId: history && mode === "range" ? Number(start) : undefined,
+      endId: history && mode === "range" ? Number(end) : undefined,
+      n: history && mode === "lastN" ? Number(count) : undefined,
+      saveTemplate: saveSetup,
+      allowDuplicate,
+      filterMediaTypes:
+        scope !== "backfill_only" && filters && media.length
+          ? media.join(",")
+          : null,
+      filterMinSizeBytes:
+        scope !== "backfill_only" && filters && minSize !== ""
+          ? Math.round(Number(minSize) * 1048576)
+          : null,
+      filterMaxSizeBytes:
+        scope !== "backfill_only" && filters && maxSize !== ""
+          ? Math.round(Number(maxSize) * 1048576)
+          : null,
+    });
+    setBusy(false);
+    if (!result.ok) {
+      const existing = (result as typeof result & { duplicateTaskId?: string })
+        .duplicateTaskId;
+      if (existing) setDuplicate(existing);
+      else setError(result.description);
+      return;
+    }
+    toast.show("success", "Task created.");
+    if (result.data.notice) toast.show("info", result.data.notice);
+    void tasks.refetch();
+    navigate(`task/${result.data.id}`);
+  }
+  async function testCopy() {
+    if (!sourceChat || !destChat || !positive(testId)) return;
+    setBusy(true);
+    setConfirmTest(false);
+    setError("");
+    const result = await api.post<{ message_id: number }>(
+      `/api/chats/${sourceChat.chat.id}/test-copy?botId=${encodeURIComponent(botId)}`,
+      { destChatId: String(destChat.chat.id), messageId: Number(testId) },
+    );
+    setBusy(false);
+    if (result.ok)
+      setTestResult(
+        `Copied to destination as message ${result.data.message_id}.`,
+      );
+    else setError(result.description);
+  }
+  if (loadingSetup)
+    return (
+      <div className="content-container">
+        <div className="loading-state">Loading saved setup…</div>
+      </div>
+    );
   return (
-    <div className="content-container">
+    <div className="content-container wizard-container">
       <PageHero
-        title="New Forward Task"
-        subtitle="Connect a bot, point it at a chat, and configure copy mode"
+        title="New copy task"
+        subtitle="Choose what to copy and where it should go."
       >
-        <button className="btn btn-secondary" onClick={() => navigate("")}>
+        <a href="#" className="button button-ghost">
           Cancel
-        </button>
+        </a>
       </PageHero>
-
-      {/* Step 1: Bot Selection */}
-      <div className="card">
-        <div className="card-header">
-          <div className="card-title">
-            <span className={`step-pill ${hasBot ? "done" : "active"}`}>
-              {hasBot ? "✓" : "1"}
+      <ol className="wizard-steps" aria-label="Setup progress">
+        {steps.map((name, index) => (
+          <li
+            key={name}
+            className={`wizard-step${step === index ? " is-current" : step > index ? " is-complete" : ""}`}
+            aria-current={step === index ? "step" : undefined}
+          >
+            <span>
+              {step > index ? <Icon name="check" size={15} /> : index + 1}
             </span>
-            <span>1. Select Telegram Bot</span>
-          </div>
-          {hasBot && <span className="badge badge-live">Connected</span>}
+            <strong>{name}</strong>
+          </li>
+        ))}
+      </ol>
+      {notice && (
+        <div className="alert alert-info">
+          <Icon name="info" />
+          <span>{notice}</span>
         </div>
-
-        {!hasBot ? (
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-            {/* Primary: Add Telegram Bot Token (Always on top) */}
+      )}
+      {error && (
+        <div className="alert alert-error" role="alert">
+          <Icon name="alert" />
+          <span>{error}</span>
+        </div>
+      )}
+      <section className="card wizard-card">
+        {step === 0 && (
+          <div className="stack">
             <div>
-              <div className="field" style={{ marginBottom: 6 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                  <label style={{ margin: 0, fontWeight: 600 }}>Telegram Bot Token</label>
-                  <a
-                    href="https://t.me/BotFather"
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    style={{ fontSize: 11.5, color: "var(--accent)", textDecoration: "none" }}
-                  >
-                    Get token from @BotFather ↗
-                  </a>
-                </div>
-                <input
-                  className="input"
-                  value={newToken}
-                  onChange={(e) => setNewToken(e.target.value)}
-                  placeholder="123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ…"
-                  type="password"
-                  autoFocus={!fromSavedId}
-                />
-              </div>
-              <p className="text-muted" style={{ fontSize: 12, marginBottom: 10 }}>
-                Token is verified directly with Telegram API to check permissions, bot username, and active workloads.
+              <span className="eyebrow">STEP 1 OF 4</span>
+              <h2 className="card-title">Choose your bot</h2>
+              <p className="text-muted">
+                Your bot needs access to both chats to copy messages.
               </p>
-              {botError && (
-                <div style={{ marginBottom: 10 }}>
-                  <PermissionErrorBanner reason="unknown" description={botError} />
-                </div>
-              )}
-              <button
-                className="btn btn-primary"
-                disabled={!newToken.trim() || savingBot}
-                onClick={verifyNewBot}
-              >
-                {savingBot ? "Verifying with Telegram…" : "Verify & Connect Bot"}
-              </button>
             </div>
-
-            {/* Secondary: Choose from Existing Bots (ONLY if bots exist) */}
-            {bots && bots.length > 0 && (
-              <div>
-                <div
-                  style={{
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 12,
-                    margin: "6px 0 14px",
-                    color: "var(--text-dim)",
-                    fontSize: 11.5,
-                    textTransform: "uppercase",
-                    letterSpacing: "0.06em",
-                    fontWeight: 600,
+            {botsError && (
+              <div className="alert alert-error">
+                {botsError}
+                <button
+                  className="button button-secondary"
+                  onClick={() => void refetchBots()}
+                >
+                  Retry
+                </button>
+              </div>
+            )}
+            {botsLoading && <p className="helper">Loading bots…</p>}
+            {!!bots?.length && (
+              <div className="field">
+                <label htmlFor="select-bot" className="form-label">
+                  Connected bot
+                </label>
+                <select
+                  className="input"
+                  id="select-bot"
+                  value={botId}
+                  disabled={busy}
+                  onChange={(e) => {
+                    setBotId(e.target.value);
+                    resetChats();
+                    setConnectNew(false);
                   }}
                 >
-                  <div style={{ flex: 1, height: 1, background: "var(--border-subtle)" }} />
-                  <span>or choose from existing bots ({bots.length})</span>
-                  <div style={{ flex: 1, height: 1, background: "var(--border-subtle)" }} />
-                </div>
-
-                <div className="field" style={{ marginBottom: 0 }}>
-                  <label>Select Saved Bot</label>
-                  <select
-                    className="input"
-                    value={selectedBotId}
-                    onChange={(e) => handleSelectBot(e.target.value)}
-                  >
-                    <option value="">Choose a previously saved bot…</option>
-                    {bots.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.label} (@{b.bot_username})
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                  <option value="">Choose a bot</option>
+                  {bots.map((bot) => (
+                    <option key={bot.id} value={bot.id}>
+                      {bot.label} (@{bot.bot_username})
+                    </option>
+                  ))}
+                </select>
               </div>
             )}
-          </div>
-        ) : (
-          /* Connected Bot summary card */
-          <div>
-            <div
-              style={{
-                display: "flex",
-                justifyContent: "space-between",
-                alignItems: "center",
-                padding: "12px 16px",
-                background: "var(--surface-raised)",
-                border: "1px solid color-mix(in oklab, var(--success) 35%, transparent)",
-                borderRadius: "var(--radius)",
-                marginBottom: 12,
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-                <span style={{ fontSize: 24 }}>🤖</span>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: "var(--ink)" }}>
-                    @{selectedBot?.bot_username ?? pendingBot?.bot_username}
-                    {selectedBot && (
-                      <span className="text-muted" style={{ fontWeight: 400, marginLeft: 8, fontSize: 13 }}>
-                        ({selectedBot.label})
-                      </span>
-                    )}
-                  </div>
-                  <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 2 }}>
-                    {pendingBot ? "Verified new bot token (will be saved when task starts)" : "Saved bot connected"}
-                  </div>
+            {connectNew || (!botsLoading && !bots?.length) ? (
+              <div className="stack">
+                <div className="field">
+                  <label className="form-label" htmlFor="new-token">
+                    Bot token
+                  </label>
+                  <input
+                    id="new-token"
+                    type="password"
+                    className="input"
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                    disabled={busy}
+                    placeholder="Paste your token"
+                  />
+                  <p className="helper">
+                    Get a token from{" "}
+                    <a
+                      href="https://t.me/BotFather"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      @BotFather
+                    </a>{" "}
+                    in Telegram using /newbot.
+                  </p>
+                </div>
+                <div className="row">
+                  <button
+                    className="button button-secondary"
+                    disabled={!token.trim() || busy}
+                    onClick={() => void connect()}
+                  >
+                    <Icon name="bot" />
+                    {busy ? "Connecting…" : "Connect bot"}
+                  </button>
+                  {!!bots?.length && (
+                    <button
+                      className="button button-ghost"
+                      onClick={() => {
+                        setConnectNew(false);
+                        setToken("");
+                      }}
+                    >
+                      Cancel
+                    </button>
+                  )}
                 </div>
               </div>
-              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={() => setShowActivityModal(true)}
-                  style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
-                  title="Inspect what else this bot is doing"
-                >
-                  🔍 Check What Else Bot Is Doing
-                </button>
-                <button
-                  className="btn btn-secondary btn-sm"
-                  onClick={handleClearBot}
-                  title="Choose a different bot"
-                >
-                  Change Bot
-                </button>
+            ) : (
+              <button
+                className="button button-ghost align-start"
+                onClick={() => setConnectNew(true)}
+              >
+                <Icon name="plus" size={17} />
+                Connect another bot
+              </button>
+            )}
+            {selectedBot && (
+              <div className="alert alert-success">
+                <Icon name="check-circle" />
+                <span>@{selectedBot.bot_username} is ready to use.</span>
+              </div>
+            )}
+            <div className="wizard-actions">
+              <span className="helper">
+                Use a dedicated bot if another app already uses yours.
+              </span>
+              <button
+                className="button button-primary"
+                disabled={!botId || busy}
+                onClick={() => {
+                  setError("");
+                  setStep(1);
+                }}
+              >
+                Continue
+                <Icon name="arrow-right" />
+              </button>
+            </div>
+          </div>
+        )}
+        {step === 1 && (
+          <div className="stack">
+            <div>
+              <span className="eyebrow">STEP 2 OF 4</span>
+              <h2 className="card-title">Where should messages go?</h2>
+              <p className="text-muted">
+                Add @{selectedBot?.bot_username || "your bot"} to both chats
+                first. For channels, make it an administrator.
+              </p>
+            </div>
+            <div className="form-grid">
+              <div className="field">
+                <label className="form-label" htmlFor="source-chat">
+                  Copy from
+                </label>
+                <input
+                  className="input"
+                  id="source-chat"
+                  value={source}
+                  onChange={(e) => {
+                    setSource(e.target.value);
+                    resetChats();
+                  }}
+                  placeholder="@source, chat ID, or t.me link"
+                  disabled={busy}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                {sourceChat && (
+                  <div
+                    className={`chat-result${sourceReady ? " is-valid" : ""}`}
+                  >
+                    <Icon name={sourceReady ? "check-circle" : "alert"} />
+                    <span>
+                      <strong>
+                        {sourceChat.chat.title ||
+                          sourceChat.chat.username ||
+                          sourceChat.chat.id}
+                      </strong>
+                      <small>
+                        {sourceChat.chat.type} · {sourceChat.chat.id}
+                      </small>
+                    </span>
+                  </div>
+                )}
+              </div>
+              <div className="field">
+                <label className="form-label" htmlFor="destination-chat">
+                  Copy to
+                </label>
+                <input
+                  className="input"
+                  id="destination-chat"
+                  value={dest}
+                  onChange={(e) => {
+                    setDest(e.target.value);
+                    resetChats();
+                  }}
+                  placeholder="@destination, chat ID, or t.me link"
+                  disabled={busy}
+                  autoComplete="off"
+                  spellCheck={false}
+                />
+                {destChat && (
+                  <div className={`chat-result${destReady ? " is-valid" : ""}`}>
+                    <Icon name={destReady ? "check-circle" : "alert"} />
+                    <span>
+                      <strong>
+                        {destChat.chat.title ||
+                          destChat.chat.username ||
+                          destChat.chat.id}
+                      </strong>
+                      <small>
+                        {destReady
+                          ? "Bot can post here"
+                          : "Posting permission needed"}
+                      </small>
+                    </span>
+                  </div>
+                )}
               </div>
             </div>
-
-            {showActivityModal && (
-              <BotActivityModal
-                botId={selectedBotId || undefined}
-                botToken={pendingBot?.token}
-                botUsername={selectedBot?.bot_username ?? pendingBot?.bot_username}
-                onClose={() => setShowActivityModal(false)}
-                onWebhookDisconnected={() => {
-                  if (selectedBotId) handleSelectBot(selectedBotId);
-                }}
-              />
-            )}
-
-            {loadingBotTasks && <div className="skeleton-row" style={{ height: 36 }} />}
-
-            {!loadingBotTasks && botActiveTasks !== null && botActiveTasks.length > 0 && (
-              <div
-                style={{
-                  background: "var(--surface-raised)",
-                  border: hasRunningBackfill
-                    ? "1px solid color-mix(in oklab, var(--warning) 50%, transparent)"
-                    : "1px solid rgba(245, 158, 11, 0.35)",
-                  borderRadius: "var(--radius)",
-                  padding: "12px 14px",
-                  marginBottom: 10,
-                }}
-              >
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                  <span
-                    style={{
-                      fontWeight: 600,
-                      fontSize: 13,
-                      color: hasRunningBackfill ? "var(--warning)" : "var(--ink)",
-                      display: "flex",
-                      alignItems: "center",
-                      gap: 6,
-                    }}
-                  >
-                    <span>{hasRunningBackfill ? "⚠️ Active Backfill in Progress on this Bot" : "Currently Active Tasks on this Bot"}</span>
-                    <span style={{ fontSize: 11.5, fontWeight: 500, color: "var(--muted)" }}>({botActiveTasks.length})</span>
-                  </span>
-                  <span className="badge badge-warning" style={{ fontSize: 11 }}>
-                    {hasRunningBackfill ? "Backfill Active" : "Active Tasks"}
-                  </span>
-                </div>
-
-                {hasRunningBackfill ? (
-                  <div
-                    style={{
-                      background: "color-mix(in oklab, var(--warning) 12%, transparent)",
-                      border: "1px solid color-mix(in oklab, var(--warning) 30%, transparent)",
-                      borderRadius: "var(--radius-sm)",
-                      padding: "10px 12px",
-                      marginBottom: 10,
-                      fontSize: 12,
-                      lineHeight: 1.5,
-                    }}
-                  >
-                    <p style={{ margin: "0 0 6px", color: "var(--ink)" }}>
-                      This bot is currently executing historical message copying for{" "}
-                      <strong>{runningBackfillTasks.map((t) => getTaskDisplayInfo(t).title).join(", ")}</strong>.
-                      Telegram enforces strict message rate limits per bot token. Running multiple backfills concurrently on the same bot will trigger severe <strong>Telegram Flood Wait (429)</strong> throttling, pausing all tasks for that bot.
-                    </p>
-                    <div style={{ fontWeight: 600, color: "var(--warning)" }}>
-                      💡 Recommendation: Use <strong>one dedicated bot token per backfilling task</strong> for maximum copy speed, or wait until the current backfill completes.
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-muted" style={{ fontSize: 12, marginBottom: 10 }}>
-                    This bot is currently executing the following tasks. You can still assign new tasks to it, but high message volumes may share Telegram rate limits.
-                  </p>
-                )}
-
-                <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                  {botActiveTasks.map((bt) => {
-                    const { title, routeText, isCustomLabel } = getTaskDisplayInfo(bt);
-                    const isBtBackfilling = bt.backfill_status === "running";
-                    return (
-                      <div
-                        key={bt.id}
-                        style={{
-                          display: "flex",
-                          justifyContent: "space-between",
-                          alignItems: "center",
-                          padding: "8px 10px",
-                          background: isBtBackfilling
-                            ? "color-mix(in oklab, var(--warning) 10%, var(--surface))"
-                            : "var(--surface)",
-                          borderRadius: "var(--radius-sm)",
-                          fontSize: 12,
-                          border: isBtBackfilling
-                            ? "1px solid color-mix(in oklab, var(--warning) 40%, transparent)"
-                            : "1px solid var(--border-subtle)",
-                        }}
-                      >
-                        <div>
-                          <strong style={{ color: "var(--ink)" }}>{title}</strong>
-                          {isCustomLabel && (
-                            <span className="text-muted" style={{ marginLeft: 8 }}>
-                              {routeText}
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                          {isBtBackfilling ? (
-                            <span className="badge badge-warning" style={{ fontSize: 10.5 }}>
-                              ⚡ Backfilling
-                            </span>
-                          ) : (
-                            <span className="badge badge-live" style={{ fontSize: 10.5 }}>
-                              {bt.live_enabled ? "Live" : "Backfill"}
-                            </span>
-                          )}
-                          <span className="text-muted" style={{ fontSize: 11 }}>
-                            {bt.processed} copied
-                          </span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {!loadingBotTasks && botActiveTasks !== null && botActiveTasks.length === 0 && (
-              <div
-                style={{
-                  padding: "8px 12px",
-                  background: "var(--success-tint)",
-                  border: "1px solid color-mix(in oklab, var(--success) 30%, transparent)",
-                  borderRadius: "var(--radius)",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 8,
-                  fontSize: 12.5,
-                }}
-              >
-                <span style={{ color: "var(--success)", fontWeight: 700 }}>✓</span>
+            <p className="helper">
+              Paste a Telegram chat or message link, a public @username, or a
+              numeric chat ID. Invite links are not supported. The chats must be
+              different.
+            </p>
+            <button
+              className="button button-secondary align-start"
+              disabled={busy || !source.trim() || !dest.trim()}
+              onClick={() => void checkChats()}
+            >
+              <Icon name="check-circle" />
+              {busy ? "Checking chats…" : "Check both chats"}
+            </button>
+            {sourceChat && sourceChat.chat.type !== "channel" && (
+              <div className="alert alert-info">
+                <Icon name="info" />
                 <span>
-                  <strong>@{selectedBot?.bot_username ?? pendingBot?.bot_username}</strong> is currently <strong>idle</strong> (0 active tasks — completely free for new assignments).
+                  In groups, bot privacy settings affect which messages are
+                  visible. Messages from other bots may not be available.
                 </span>
               </div>
             )}
+            {sourceChat && !!sourceChat.pastTasks?.length && (
+              <details className="advanced-section">
+                <summary>
+                  <Icon name="history" size={17} />
+                  Previous tasks from this chat ({sourceChat.pastTasks.length})
+                </summary>
+                <div className="stack">
+                  {sourceChat.pastTasks.map((task) => (
+                    <a
+                      className="history-link"
+                      href={`#task/${task.id}`}
+                      key={task.id}
+                    >
+                      <strong>
+                        {task.dest_chat_title || task.dest_chat_id}
+                      </strong>
+                      <span className="helper">
+                        {task.processed} copied
+                        {task.last_copied_message_id
+                          ? ` · Last copied ID ${task.last_copied_message_id}`
+                          : ""}
+                      </span>
+                      <Icon name="arrow-right" size={17} />
+                    </a>
+                  ))}
+                  <p className="helper">
+                    Review the destination and message range to avoid copying
+                    the same messages twice.
+                  </p>
+                </div>
+              </details>
+            )}
+            {sourceChat && (
+              <details className="advanced-section">
+                <summary>
+                  <Icon name="shield" size={17} />
+                  Bot permissions
+                </summary>
+                <CapabilityChecklist capabilities={sourceChat.capabilities} />
+              </details>
+            )}
+            {sourceChat && (
+              <ChatTools botId={botId} chatId={String(sourceChat.chat.id)} />
+            )}
+            <div className="wizard-actions">
+              <button
+                className="button button-secondary"
+                disabled={busy}
+                onClick={() => {
+                  setError("");
+                  setStep(0);
+                }}
+              >
+                <Icon name="arrow-left" />
+                Back
+              </button>
+              <button
+                className="button button-primary"
+                disabled={!sourceReady || !destReady || busy}
+                onClick={() => {
+                  setError("");
+                  setStep(2);
+                }}
+              >
+                Continue
+                <Icon name="arrow-right" />
+              </button>
+            </div>
           </div>
         )}
-      </div>
-
-      {/* Step 2: Source Chat */}
-      {hasBot && (
-        <div className="card">
-          <div className="card-header">
-            <div className="card-title">
-              <span className={`step-pill ${sourceLookup ? "done" : "active"}`}>
-                {sourceLookup ? "✓" : "2"}
-              </span>
-              <span>2. Source Chat / Channel</span>
-            </div>
-          </div>
-
-          <div className="field">
-            <label>Source Chat ID or @username</label>
-            <div className="row">
-              <input
-                className="input"
-                style={{ flex: 1 }}
-                value={sourceChatId}
-                onChange={(e) => setSourceChatId(e.target.value)}
-                placeholder="e.g. -1001234567890 or @channel"
-              />
-              <button className="btn btn-secondary" disabled={!sourceChatId || lookingUpSource} onClick={lookupSource}>
-                {lookingUpSource ? "Checking…" : "Check"}
-              </button>
-            </div>
-          </div>
-
-          {sourceError && <PermissionErrorBanner reason={sourceError.reason} description={sourceError.description} />}
-
-          {sourceLookup && (
-            <div style={{ marginTop: 14 }}>
-              <div style={{ background: "var(--surface-raised)", borderRadius: "var(--radius)", padding: "12px 14px", marginBottom: 14 }}>
-                <p style={{ fontWeight: 700, fontSize: 14 }}>
-                  {sourceLookup.chat.title ?? sourceLookup.chat.id}
-                </p>
-                <p className="text-muted" style={{ fontSize: 12, marginTop: 2 }}>
-                  {sourceLookup.chat.type} · bot status: <strong>{sourceLookup.botStatus}</strong>
-                  {sourceLookup.memberCount !== undefined && ` · ${sourceLookup.memberCount} members`}
-                </p>
-              </div>
-
-              {/* Group Chat Source Notice (Telegram Bot API Restriction) */}
-              {(sourceLookup.chat.type === "group" || sourceLookup.chat.type === "supergroup") && (
-                <div
-                  style={{
-                    background: "rgba(245, 158, 11, 0.08)",
-                    border: "1px solid rgba(245, 158, 11, 0.35)",
-                    borderRadius: "var(--radius)",
-                    padding: "12px 14px",
-                    marginBottom: 14,
-                  }}
-                >
-                  <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                    <span style={{ fontSize: 18, marginTop: 1 }}>⚠️</span>
-                    <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                      <strong style={{ color: "var(--warning)" }}>Group Chat Notice (Telegram Bot API Restriction):</strong>
-                      <p style={{ margin: "4px 0 6px", color: "var(--ink)" }}>
-                        Telegram prevents bots from seeing or copying messages sent by other bots in group chats (anti-loop policy). If this group relies on other bots to post files or messages, those bot-authored messages will not be copyable (they will be skipped as <em>"message to copy not found"</em>).
-                      </p>
-                      <span style={{ color: "var(--muted)", fontSize: 12 }}>
-                        💡 <strong>Recommendation:</strong> If you need complete file cloning, consider using a <strong>Telegram Channel</strong> as the source. Channel posts are published on behalf of the channel and can be copied freely by bots regardless of author.
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Previous Task History for this Source Channel */}
-              {sourceLookup.pastTasks && sourceLookup.pastTasks.length > 0 ? (
-                <div
-                  style={{
-                    marginBottom: 14,
-                    background: "var(--surface-raised)",
-                    border: "1px solid rgba(245, 158, 11, 0.35)",
-                    borderRadius: "var(--radius)",
-                    padding: "14px",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                    <span style={{ fontWeight: 600, fontSize: 13, color: "var(--warning)" }}>
-                      📋 Channel Task History ({sourceLookup.pastTasks.length} previous task{sourceLookup.pastTasks.length > 1 ? "s" : ""})
-                    </span>
-                    <span className="badge badge-warning" style={{ fontSize: 11 }}>Previously Added</span>
-                  </div>
-                  <p className="text-muted" style={{ fontSize: 12, marginBottom: 12 }}>
-                    This channel was previously connected to the following tasks. Review what was done and the last copied message ID to prevent duplicate copying.
-                  </p>
-
-                  <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {sourceLookup.pastTasks.map((pt) => {
-                      const statusLabel = pt.stop_reason
-                        ? `Stopped (${pt.stop_reason})`
-                        : pt.backfill_status === "complete"
-                        ? "Complete"
-                        : pt.live_enabled
-                        ? "Live Forwarding"
-                        : pt.backfill_status;
-
-                      return (
-                        <div
-                          key={pt.id}
-                          style={{
-                            background: "var(--surface)",
-                            borderRadius: "var(--radius-sm)",
-                            padding: "10px 12px",
-                            fontSize: 12,
-                            border: "1px solid var(--border-subtle)",
-                          }}
-                        >
-                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
-                            <strong style={{ fontSize: 12.5, color: "var(--ink)" }}>{pt.label}</strong>
-                            <span className="badge" style={{ fontSize: 10.5 }}>{statusLabel}</span>
-                          </div>
-                          <div className="task-detail" style={{ fontSize: 11.5, color: "var(--muted)", marginBottom: 6 }}>
-                            <span>Dest: <strong>{pt.dest_chat_title ?? pt.dest_chat_id}</strong></span>
-                            <span>·</span>
-                            <span>Bot: @{pt.bot_username}</span>
-                            <span>·</span>
-                            <span>Mode: {(pt.scope ?? "live").replace(/_/g, " ")}</span>
-                          </div>
-                          <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12 }}>
-                            <span>
-                              Copied: <strong>{pt.processed} msgs</strong>{pt.failed ? ` (${pt.failed} failed)` : ""}
-                            </span>
-                            <span>
-                              Last Copied Message ID:{" "}
-                              <strong style={{ color: "var(--accent)" }}>
-                                {pt.last_copied_message_id != null ? `#${pt.last_copied_message_id}` : "None"}
-                              </strong>
-                            </span>
-                            {pt.start_id != null && pt.end_id != null && (
-                              <span>Range: #{pt.start_id} → #{pt.end_id}</span>
-                            )}
-                            <span>Created: {new Date(pt.created_at * 1000).toLocaleDateString()}</span>
-                          </div>
-                        </div>
-                      );
-                    })}
-                  </div>
-
-                  {(() => {
-                    const validIds = sourceLookup.pastTasks
-                      .map((pt) => pt.last_copied_message_id)
-                      .filter((id): id is number => id != null && id > 0);
-                    const maxLastId = validIds.length > 0 ? Math.max(...validIds) : 0;
-                    if (maxLastId > 0) {
-                      return (
-                        <div
-                          style={{
-                            marginTop: 12,
-                            padding: "8px 12px",
-                            background: "var(--accent-tint)",
-                            borderRadius: "var(--radius-sm)",
-                            border: "1px solid var(--accent-border)",
-                            fontSize: 12,
-                          }}
-                        >
-                          💡 <strong>Duplication Safeguard:</strong> The highest message ID copied from this channel so far is <strong>#{maxLastId}</strong>. If you are configuring a new backfill, set your <strong>Start ID to #{maxLastId + 1}</strong> to avoid duplicating past messages.
-                        </div>
-                      );
-                    }
-                    return null;
-                  })()}
-                </div>
-              ) : (
-                <div
-                  style={{
-                    marginBottom: 14,
-                    padding: "8px 12px",
-                    background: "var(--success-tint)",
-                    borderRadius: "var(--radius-sm)",
-                    border: "1px solid color-mix(in oklab, var(--success) 30%, transparent)",
-                    fontSize: 12,
-                    color: "var(--ink)",
-                  }}
-                >
-                  ✓ <strong>Fresh Channel:</strong> No previous tasks found for this source channel.
-                </div>
-              )}
-
-              <CapabilityChecklist capabilities={sourceLookup.capabilities} />
-
-              {/* Collapsible Admin Tools Accordion */}
-              <div className="accordion">
-                <div
-                  className="accordion-header"
-                  onClick={() => setShowAdminTools((s) => !s)}
-                >
-                  <span>🛠️ Advanced Admin Tools (Invites, Bans, Diagnostics)</span>
-                  <span>{showAdminTools ? "▲" : "▼"}</span>
-                </div>
-                {showAdminTools && (
-                  <div className="accordion-body">
-                    <div className="row">
-                      <button className="btn btn-secondary btn-sm" onClick={generateInviteLink}>
-                        Generate invite link
-                      </button>
-                      <button className="btn btn-secondary btn-sm" onClick={sendTestMessage}>
-                        Send test message
-                      </button>
-                      <button className="btn btn-secondary btn-sm" onClick={checkLatestId}>
-                        Check latest message ID
-                      </button>
-                    </div>
-                    {inviteLink && (
-                      <p className="text-mono" style={{ fontSize: 12, wordBreak: "break-all" }}>
-                        {inviteLink}
-                      </p>
-                    )}
-                    <div className="row">
-                      <input
-                        className="input"
-                        style={{ maxWidth: 220 }}
-                        placeholder="Paste invite link to revoke"
-                        value={revokeInviteLinkInput}
-                        onChange={(e) => setRevokeInviteLinkInput(e.target.value)}
-                      />
-                      <button className="btn btn-secondary btn-sm" onClick={revokeInviteLink} disabled={!revokeInviteLinkInput}>
-                        Revoke link
-                      </button>
-                    </div>
-                    <div className="row">
-                      <input
-                        className="input"
-                        style={{ maxWidth: 160 }}
-                        placeholder="User ID"
-                        value={userIdInput}
-                        onChange={(e) => setUserIdInput(e.target.value)}
-                      />
-                      <button className="btn btn-secondary btn-sm" onClick={banUser}>
-                        Ban
-                      </button>
-                      <button className="btn btn-secondary btn-sm" onClick={unbanUser}>
-                        Unban
-                      </button>
-                      <button className="btn btn-secondary btn-sm" onClick={promoteUser}>
-                        Promote
-                      </button>
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Step 3: Destination & Copy Config */}
-      {sourceLookup && (
-        <div className="card">
-          <div className="card-header">
-            <div className="card-title">
-              <span className={`step-pill ${destLookup ? "done" : "active"}`}>
-                {destLookup ? "✓" : "3"}
-              </span>
-              <span>3. Destination & Sync Mode</span>
-            </div>
-          </div>
-
-          <div className="field">
-            <label>Destination chat</label>
-            <div className="row">
-              <input
-                className="input"
-                style={{ flex: 1 }}
-                value={destChatId}
-                onChange={(e) => setDestChatId(e.target.value)}
-                placeholder="e.g. -1009876543210 or @destchannel"
-              />
-              <button className="btn btn-secondary" disabled={!destChatId || lookingUpDest} onClick={lookupDest}>
-                {lookingUpDest ? "Checking…" : "Check"}
-              </button>
-            </div>
-          </div>
-
-          {destError && <PermissionErrorBanner reason={destError.reason} description={destError.description} />}
-
-          {destLookup && (
-            <>
-              <p className="text-muted" style={{ fontSize: 13, marginBottom: 16 }}>
-                <strong>{destLookup.chat.title ?? destLookup.chat.id}</strong> —{" "}
-                {destLookup.capabilities.find((c) => c.key === "send_message")?.available
-                  ? "bot can post here ✓"
-                  : "bot cannot post here ✗"}
+        {step === 2 && (
+          <div className="stack">
+            <div>
+              <span className="eyebrow">STEP 3 OF 4</span>
+              <h2 className="card-title">Which messages?</h2>
+              <p className="text-muted">
+                Choose a one-time copy, ongoing copying, or both.
               </p>
-
-              {/* Destination Group Chat Warning for Future Operations */}
-              {(destLookup.chat.type === "group" || destLookup.chat.type === "supergroup") && (
-                <div
-                  style={{
-                    background: "rgba(56, 189, 248, 0.08)",
-                    border: "1px solid rgba(56, 189, 248, 0.3)",
-                    borderRadius: "var(--radius)",
-                    padding: "12px 14px",
-                    marginBottom: 16,
-                  }}
+            </div>
+            <fieldset className="choice-grid">
+              <legend className="sr-only">Messages to copy</legend>
+              {(
+                [
+                  {
+                    value: "live",
+                    icon: "send",
+                    title: "New messages",
+                    description: "Copy new messages as they arrive.",
+                  },
+                  {
+                    value: "backfill_only",
+                    icon: "history",
+                    title: "Existing messages",
+                    description: "Copy a selected part of the history once.",
+                  },
+                  {
+                    value: "live_and_backfill",
+                    icon: "copy",
+                    title: "Existing + new",
+                    description:
+                      "Copy the history, then keep copying new messages.",
+                  },
+                ] as const
+              ).map((option) => (
+                <label
+                  key={option.value}
+                  className={`choice-card${scope === option.value ? " is-selected" : ""}`}
                 >
-                  <div style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
-                    <span style={{ fontSize: 18, marginTop: 1 }}>ℹ️</span>
-                    <div style={{ fontSize: 12.5, lineHeight: 1.5 }}>
-                      <strong style={{ color: "var(--info)" }}>Destination is a Group Chat:</strong>
-                      <p style={{ margin: "4px 0 6px", color: "var(--ink)" }}>
-                        Messages copied here will be sent under this bot's identity. <strong>Notice for future operations:</strong> Telegram's anti-loop rule prevents bots from copying messages sent by other bots in groups. If you or another bot ever attempt to clone messages <em>out</em> of this destination group later, those bot-authored messages will not be copyable.
-                      </p>
-                      <span style={{ color: "var(--muted)", fontSize: 12 }}>
-                        💡 <strong>Tip:</strong> If you are creating a permanent file archive or mirror intended to be cloned again by other bots in the future, a <strong>Telegram Channel</strong> is recommended.
-                      </span>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              <div className="field">
-                <label>Copy Scope</label>
-                <select className="input" value={scope} onChange={(e) => setScope(e.target.value as TaskScope)}>
-                  <option value="live">New messages only (Live forward)</option>
-                  <option value="live_and_backfill">✨ Existing + New (Catch-Up Stream)</option>
-                  <option value="backfill_only">Existing only (One-time history backfill)</option>
-                </select>
-
-                {wantsBackfill && hasRunningBackfill && (
-                  <div
-                    style={{
-                      margin: "10px 0 6px",
-                      padding: "12px 14px",
-                      background: "color-mix(in oklab, var(--warning) 12%, transparent)",
-                      border: "1px solid color-mix(in oklab, var(--warning) 40%, transparent)",
-                      borderRadius: "var(--radius)",
-                      fontSize: 12.5,
-                      color: "var(--ink)",
-                      lineHeight: 1.5,
+                  <input
+                    type="radio"
+                    name="scope"
+                    value={option.value}
+                    checked={scope === option.value}
+                    onChange={() => {
+                      setScope(option.value);
+                      setError("");
                     }}
-                  >
-                    <div style={{ fontWeight: 700, color: "var(--warning)", marginBottom: 4, display: "flex", alignItems: "center", gap: 6 }}>
-                      <span>⚠️ Flood Wait Advisory: Concurrent Backfill Detected</span>
-                    </div>
-                    <p style={{ margin: "0 0 8px" }}>
-                      <strong>@{selectedBot?.bot_username ?? pendingBot?.bot_username}</strong> is already actively running a historical backfill for{" "}
-                      <strong>{runningBackfillTasks.map((t) => getTaskDisplayInfo(t).title).join(", ")}</strong>. Assigning another backfill to this same bot token will split Telegram's copy quota and trigger <strong>Telegram Flood Wait (429)</strong> throttling.
-                    </p>
-                    <ul style={{ margin: 0, paddingLeft: 18 }}>
-                      <li>
-                        <strong>Recommended:</strong> Return to Step 1 and connect a separate bot token from{" "}
-                        <a href="https://t.me/BotFather" target="_blank" rel="noopener noreferrer" style={{ color: "var(--accent)" }}>
-                          @BotFather ↗
-                        </a>{" "}
-                        (1 bot per backfill task prevents flood waits).
-                      </li>
-                      <li style={{ marginTop: 3 }}>
-                        <strong>Alternative:</strong> Switch scope to <em>"New messages only (Live forward)"</em> if you only need upcoming messages.
-                      </li>
-                    </ul>
-                  </div>
-                )}
-              </div>
-
-              {wantsBackfill && (
+                  />
+                  <Icon name={option.icon} size={23} />
+                  <strong>{option.title}</strong>
+                  <span>{option.description}</span>
+                </label>
+              ))}
+            </fieldset>
+            {history && (
+              <section className="subsection stack">
+                <h3>Choose the history</h3>
                 <div className="field">
-                  <label>Backfill Mode</label>
-                  <div className="row" style={{ marginBottom: 8 }}>
-                    <label className="row" style={{ gap: 6, cursor: "pointer" }}>
-                      <input type="radio" checked={backfillMode === "lastN"} onChange={() => setBackfillMode("lastN")} /> Last N messages
-                    </label>
-                    <label className="row" style={{ gap: 6, cursor: "pointer" }}>
-                      <input type="radio" checked={backfillMode === "range"} onChange={() => setBackfillMode("range")} /> Explicit ID range
-                    </label>
-                  </div>
-                  {backfillMode === "lastN" ? (
-                    <input className="input" style={{ maxWidth: 160 }} value={n} onChange={(e) => setN(e.target.value)} placeholder="N messages" />
-                  ) : (
-                    <div className="row">
-                      <input className="input" style={{ maxWidth: 160 }} value={startId} onChange={(e) => setStartId(e.target.value)} placeholder="Start ID" />
-                      <input className="input" style={{ maxWidth: 160 }} value={endId} onChange={(e) => setEndId(e.target.value)} placeholder="End ID" />
+                  <label className="form-label" htmlFor="history-mode">
+                    Selection method
+                  </label>
+                  <select
+                    id="history-mode"
+                    className="input"
+                    value={mode}
+                    onChange={(e) =>
+                      setMode(e.target.value as "range" | "lastN")
+                    }
+                  >
+                    <option value="range">Message ID range</option>
+                    <option value="lastN">Most recent message IDs</option>
+                  </select>
+                </div>
+                {mode === "range" ? (
+                  <>
+                    <div className="form-grid">
+                      <div className="field">
+                        <label className="form-label" htmlFor="start-id">
+                          First message ID
+                        </label>
+                        <input
+                          className="input"
+                          id="start-id"
+                          inputMode="numeric"
+                          value={start}
+                          onChange={(e) => setStart(e.target.value)}
+                          placeholder="1"
+                        />
+                      </div>
+                      <div className="field">
+                        <label className="form-label" htmlFor="end-id">
+                          Last message ID
+                        </label>
+                        <input
+                          className="input"
+                          id="end-id"
+                          inputMode="numeric"
+                          value={end}
+                          onChange={(e) => setEnd(e.target.value)}
+                          placeholder="100"
+                        />
+                      </div>
                     </div>
+                    <p className="helper">
+                      In Telegram, copy a message link. Its last number is the
+                      message ID: t.me/channel/<strong>123</strong>.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <div className="field">
+                      <label className="form-label" htmlFor="recent-count">
+                        Number of recent message IDs
+                      </label>
+                      <input
+                        className="input"
+                        id="recent-count"
+                        inputMode="numeric"
+                        value={count}
+                        onChange={(e) => setCount(e.target.value)}
+                      />
+                    </div>
+                    <div className="alert alert-info">
+                      <Icon name="info" />
+                      <p>
+                        When you start, the bot sends a temporary message to the
+                        source to find the latest ID, then tries to delete it.
+                        Members may see a notification.
+                      </p>
+                    </div>
+                  </>
+                )}
+                <p className="helper">
+                  Deleted, protected, or unavailable messages may be skipped.
+                  Message IDs do not always equal the number of copyable
+                  messages.
+                </p>
+              </section>
+            )}
+            {scope !== "backfill_only" && (
+              <details className="advanced-section">
+                <summary>
+                  <Icon name="filter" size={17} />
+                  Filter new messages{" "}
+                  <span className="text-muted">Optional</span>
+                </summary>
+                <div className="stack">
+                  <label className="check-row">
+                    <input
+                      type="checkbox"
+                      checked={filters}
+                      onChange={(e) => setFilters(e.target.checked)}
+                    />
+                    Only copy messages matching these filters
+                  </label>
+                  {filters && (
+                    <>
+                      <fieldset className="stack">
+                        <legend className="form-label">Message types</legend>
+                        <div className="row wrap">
+                          {["document", "video", "photo", "audio"].map(
+                            (type) => (
+                              <label className="check-row" key={type}>
+                                <input
+                                  type="checkbox"
+                                  checked={media.includes(type)}
+                                  onChange={(e) =>
+                                    setMedia((values) =>
+                                      e.target.checked
+                                        ? [...values, type]
+                                        : values.filter(
+                                            (value) => value !== type,
+                                          ),
+                                    )
+                                  }
+                                />
+                                {type[0].toUpperCase() + type.slice(1)}
+                              </label>
+                            ),
+                          )}
+                        </div>
+                        <p className="helper">
+                          Leave all unchecked to allow every message type.
+                        </p>
+                      </fieldset>
+                      <div className="form-grid">
+                        <div className="field">
+                          <label className="form-label" htmlFor="min-size">
+                            Minimum file size (MB)
+                          </label>
+                          <input
+                            className="input"
+                            id="min-size"
+                            type="number"
+                            min="0"
+                            step="any"
+                            value={minSize}
+                            onChange={(e) => setMinSize(e.target.value)}
+                            placeholder="No minimum"
+                          />
+                        </div>
+                        <div className="field">
+                          <label className="form-label" htmlFor="max-size">
+                            Maximum file size (MB)
+                          </label>
+                          <input
+                            className="input"
+                            id="max-size"
+                            type="number"
+                            min="0"
+                            step="any"
+                            value={maxSize}
+                            onChange={(e) => setMaxSize(e.target.value)}
+                            placeholder="No maximum"
+                          />
+                        </div>
+                      </div>
+                    </>
                   )}
-                  <p className="text-muted" style={{ fontSize: 12, marginTop: 6 }}>
-                    ⚡ Bulk backfill pace: 60 messages/minute. Runs at maximum speed without filters to preserve complete chat history.
+                  <p className="helper">
+                    Filters apply to new messages only. Existing history is
+                    copied without these filters.
                   </p>
                 </div>
-              )}
-
-              {/* Message Filters (Available for Live and Live+Backfill) */}
-              {scope !== "backfill_only" && (
-                <div
-                  style={{
-                    margin: "16px 0",
-                    padding: "14px 16px",
-                    background: "var(--surface-raised)",
-                    border: "1px solid var(--border-subtle)",
-                    borderRadius: "var(--radius)",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                    <div style={{ fontWeight: 700, fontSize: 13.5, display: "flex", alignItems: "center", gap: 6 }}>
-                      <span>🔍 {scope === "live" ? "Live Message Filters" : "Live Stream Filters (Stage 2)"}</span>
-                    </div>
-                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
-                      <input
-                        type="checkbox"
-                        checked={enableFilters}
-                        onChange={(e) => setEnableFilters(e.target.checked)}
-                      />
-                      Enable Filters
-                    </label>
-                  </div>
-
-                  {scope === "live_and_backfill" && (
-                    <div
-                      style={{
-                        padding: "10px 12px",
-                        background: "var(--accent-tint)",
-                        border: "1px solid var(--accent-border)",
-                        borderRadius: "var(--radius-sm)",
-                        fontSize: 12,
-                        color: "var(--ink)",
-                        lineHeight: 1.5,
-                        marginBottom: 12,
-                      }}
-                    >
-                      <div style={{ fontWeight: 600, color: "var(--info)", marginBottom: 3 }}>
-                        ℹ️ Two-Stage Catch-Up Stream
-                      </div>
-                      <div>
-                        • <strong>Historical Backfill (Stage 1)</strong>: Existing messages up to the latest ID will be copied in bulk (60 msgs/min) <strong>without filters</strong> to ensure full speed and complete chat history.
-                      </div>
-                      <div style={{ marginTop: 3 }}>
-                        • <strong>Live Messages (Stage 2)</strong>: All incoming messages after backfill will be evaluated against your filters below. While backfill is running, matching live messages are safely queued in order.
-                      </div>
-                    </div>
-                  )}
-
-                  {enableFilters && (
-                    <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 12 }}>
-                      <div>
-                        <label style={{ fontSize: 12, fontWeight: 600, color: "var(--ink)", display: "block", marginBottom: 6 }}>
-                          Allowed Media Types (Leave unchecked for all media)
-                        </label>
-                        <div style={{ display: "flex", gap: 14, flexWrap: "wrap", fontSize: 12.5 }}>
-                          {[
-                            { id: "document", label: "📄 Documents / Files" },
-                            { id: "video", label: "🎬 Videos" },
-                            { id: "photo", label: "🖼️ Photos" },
-                            { id: "audio", label: "🎵 Audio" },
-                          ].map((mt) => (
-                            <label key={mt.id} style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
-                              <input
-                                type="checkbox"
-                                checked={filterMediaTypes.includes(mt.id)}
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    setFilterMediaTypes([...filterMediaTypes, mt.id]);
-                                  } else {
-                                    setFilterMediaTypes(filterMediaTypes.filter((t) => t !== mt.id));
-                                  }
-                                }}
-                              />
-                              {mt.label}
-                            </label>
-                          ))}
-                        </div>
-                        <p className="text-muted" style={{ fontSize: 11.5, marginTop: 4 }}>
-                          Selecting specific media types automatically filters out text-only channel posts.
-                        </p>
-                      </div>
-
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: 12 }}>
-                        <div className="field" style={{ margin: 0 }}>
-                          <label style={{ fontSize: 12 }}>Minimum File Size (MB)</label>
-                          <input
-                            className="input"
-                            type="number"
-                            min="0"
-                            step="1"
-                            placeholder="e.g. 10 (ignore files < 10 MB)"
-                            value={minFileSizeMb}
-                            onChange={(e) => setMinFileSizeMb(e.target.value)}
-                          />
-                        </div>
-                        <div className="field" style={{ margin: 0 }}>
-                          <label style={{ fontSize: 12 }}>Maximum File Size (MB, optional)</label>
-                          <input
-                            className="input"
-                            type="number"
-                            min="0"
-                            step="1"
-                            placeholder="e.g. 500 (ignore files > 500 MB)"
-                            value={maxFileSizeMb}
-                            onChange={(e) => setMaxFileSizeMb(e.target.value)}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
+              </details>
+            )}
+            <div className="wizard-actions">
+              <button
+                className="button button-secondary"
+                onClick={() => {
+                  setError("");
+                  setStep(1);
+                }}
+              >
+                <Icon name="arrow-left" />
+                Back
+              </button>
+              <button
+                className="button button-primary"
+                onClick={() => {
+                  const invalid = validateMessages();
+                  setError(invalid);
+                  if (!invalid) setStep(3);
+                }}
+              >
+                Review task
+                <Icon name="arrow-right" />
+              </button>
+            </div>
+          </div>
+        )}
+        {step === 3 && (
+          <div className="stack">
+            <div>
+              <span className="eyebrow">STEP 4 OF 4</span>
+              <h2 className="card-title">Ready to start?</h2>
+              <p className="text-muted">
+                Review your task before copying begins.
+              </p>
+            </div>
+            <div className="copy-route">
+              <div>
+                <span className="helper">FROM</span>
+                <strong>{sourceChat?.chat.title || sourceChat?.chat.id}</strong>
+              </div>
+              <Icon name="arrow-right" />
+              <div>
+                <span className="helper">TO</span>
+                <strong>{destChat?.chat.title || destChat?.chat.id}</strong>
+              </div>
+            </div>
+            <dl className="review-list">
+              <div>
+                <dt>Bot</dt>
+                <dd>@{selectedBot?.bot_username}</dd>
+              </div>
+              <div>
+                <dt>Messages</dt>
+                <dd>{SCOPE_LABELS[scope]}</dd>
+              </div>
+              {history && (
+                <div>
+                  <dt>History selection</dt>
+                  <dd>
+                    {mode === "range"
+                      ? `Message IDs ${start} to ${end}`
+                      : `${count} most recent message IDs`}
+                  </dd>
                 </div>
               )}
-
-              <div className="row" style={{ marginTop: 8 }}>
-                <input
-                  className="input"
-                  style={{ maxWidth: 180 }}
-                  placeholder="Message ID (optional)"
-                  value={testMessageId}
-                  onChange={(e) => setTestMessageId(e.target.value)}
-                />
-                <button className="btn btn-secondary" disabled={testingCopy} onClick={runTestCopy}>
-                  {testingCopy ? "Sending…" : "Send test copy"}
-                </button>
+              <div>
+                <dt>New message filters</dt>
+                <dd>
+                  {scope === "backfill_only"
+                    ? "Not applicable"
+                    : filters
+                      ? `${media.length ? media.join(", ") : "All types"}${minSize ? ` · min ${minSize} MB` : ""}${maxSize ? ` · max ${maxSize} MB` : ""}`
+                      : "None"}
+                </dd>
               </div>
-              {testCopyResult && (
-                <p className="text-muted" style={{ fontSize: 12, marginTop: 8 }}>
-                  {testCopyResult}
+            </dl>
+            {history && mode === "lastN" && (
+              <p className="alert alert-info">
+                Starting will send and try to delete a temporary message in the
+                source chat to find the latest ID.
+              </p>
+            )}
+            <div className="field">
+              <label className="form-label" htmlFor="task-label">
+                Task name <span className="text-muted">(optional)</span>
+              </label>
+              <input
+                className="input"
+                id="task-label"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                maxLength={120}
+                placeholder="Use chat names"
+                disabled={busy}
+              />
+            </div>
+            <label className="check-row">
+              <input
+                type="checkbox"
+                checked={saveSetup}
+                onChange={(e) => setSaveSetup(e.target.checked)}
+                disabled={busy}
+              />
+              Save this setup for next time
+            </label>
+            <details className="advanced-section">
+              <summary>
+                <Icon name="send" size={17} />
+                Try one message first
+              </summary>
+              <div className="stack">
+                <p className="helper">
+                  This sends a real copy to the destination. The task may copy
+                  it again if it falls within your selected range.
                 </p>
-              )}
-
-              {duplicate && (
-                <div className="permission-banner" style={{ marginTop: 16 }}>
-                  <span>⚠</span>
-                  <div>
-                    A task for this source → destination already exists ("{duplicate.label}").{" "}
-                    <button
-                      className="btn btn-danger btn-sm"
-                      style={{ marginTop: 8 }}
-                      onClick={() => createTask(true, lastSaveTemplate)}
-                    >
-                      Create anyway
-                    </button>
-                  </div>
+                <div className="field">
+                  <label className="form-label" htmlFor="test-id">
+                    Source message ID
+                  </label>
+                  <input
+                    className="input"
+                    id="test-id"
+                    inputMode="numeric"
+                    value={testId}
+                    onChange={(e) => setTestId(e.target.value)}
+                    disabled={busy}
+                  />
                 </div>
-              )}
-
-              <div className="row" style={{ marginTop: 24 }}>
-                <button className="btn btn-primary" disabled={creating} onClick={() => createTask(false, false)}>
-                  {creating && !lastSaveTemplate ? "Creating…" : "Create Task"}
+                <button
+                  className="button button-secondary align-start"
+                  disabled={!positive(testId) || busy}
+                  onClick={() => setConfirmTest(true)}
+                >
+                  Send test copy
                 </button>
-                <button className="btn btn-secondary" disabled={creating} onClick={() => createTask(false, true)}>
-                  {creating && lastSaveTemplate ? "Saving…" : "Save & Start"}
-                </button>
+                {testResult && (
+                  <p className="alert alert-success" role="status">
+                    {testResult}
+                  </p>
+                )}
               </div>
+            </details>
+            <div className="wizard-actions">
+              <button
+                className="button button-secondary"
+                disabled={busy}
+                onClick={() => {
+                  setError("");
+                  setStep(2);
+                }}
+              >
+                <Icon name="arrow-left" />
+                Back
+              </button>
+              <button
+                className="button button-primary"
+                disabled={busy}
+                onClick={() => void create()}
+              >
+                <Icon name="play" />
+                {busy ? "Starting…" : "Start copying"}
+              </button>
+            </div>
+          </div>
+        )}
+      </section>
+      {duplicate && (
+        <Modal
+          title="A task already uses these chats"
+          busy={busy}
+          onClose={() => setDuplicate(null)}
+          actions={
+            <>
+              <a href={`#task/${duplicate}`} className="button button-primary">
+                Open existing task
+              </a>
+              <button
+                className="button button-secondary"
+                disabled={busy}
+                onClick={() => {
+                  setDuplicate(null);
+                  void create(true);
+                }}
+              >
+                Create another anyway
+              </button>
             </>
-          )}
-        </div>
+          }
+        >
+          <p>
+            Another task already copies from this source to this destination.
+            Starting a second one can copy messages twice.
+          </p>
+        </Modal>
+      )}
+      {confirmTest && (
+        <Modal
+          title="Send a test copy?"
+          onClose={() => setConfirmTest(false)}
+          actions={
+            <>
+              <button
+                className="button button-secondary"
+                onClick={() => setConfirmTest(false)}
+              >
+                Cancel
+              </button>
+              <button
+                className="button button-primary"
+                onClick={() => void testCopy()}
+              >
+                Send copy
+              </button>
+            </>
+          }
+        >
+          <p>
+            Message {testId} will be copied into{" "}
+            <strong>{destChat?.chat.title || destChat?.chat.id}</strong>.
+          </p>
+        </Modal>
       )}
     </div>
   );

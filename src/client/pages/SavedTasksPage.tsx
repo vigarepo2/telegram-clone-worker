@@ -3,102 +3,139 @@ import { api } from "../lib/api";
 import { usePolling } from "../lib/usePolling";
 import { useToast } from "../components/Toast";
 import { PageHero } from "../components/PageHero";
-import { navigate } from "../lib/router";
+import { Icon } from "../components/Icon";
+import { Modal } from "../components/Modal";
+import { SCOPE_LABELS } from "./TasksPage";
 import type { SavedTaskSummary } from "../../shared/rpcTypes";
-
-const SCOPE_LABEL: Record<SavedTaskSummary["scope"], string> = {
-  live: "New messages only",
-  live_and_backfill: "Existing + new",
-  backfill_only: "Existing only (one-time)",
-};
-
-function summarize(saved: SavedTaskSummary): string {
-  const scope = SCOPE_LABEL[saved.scope];
-  if (!saved.backfill_mode) return scope;
-  const backfill =
-    saved.backfill_mode === "lastN" ? `last ${saved.n ?? "?"} messages` : `ids ${saved.start_id}–${saved.end_id}`;
-  return `${scope} · ${backfill}`;
-}
-
 export function SavedTasksPage() {
-  const { data: saved, loading, refetch } = usePolling(() => api.get<SavedTaskSummary[]>("/api/saved-tasks"), 10000);
-  const [confirming, setConfirming] = useState<SavedTaskSummary | null>(null);
+  const { data, loading, error, refetch } = usePolling(
+    () => api.get<SavedTaskSummary[]>("/api/saved-tasks"),
+    15000,
+  );
+  const [remove, setRemove] = useState<SavedTaskSummary | null>(null);
+  const [busy, setBusy] = useState(false);
   const toast = useToast();
-
-  async function confirmDelete() {
-    if (!confirming) return;
-    const res = await api.del(`/api/saved-tasks/${confirming.id}`);
-    if (res.ok) {
-      toast.show("success", "Saved task deleted");
-    } else {
-      toast.show("error", res.description);
+  async function deleteSaved() {
+    if (!remove) return;
+    setBusy(true);
+    const result = await api.del(`/api/saved-tasks/${remove.id}`);
+    setBusy(false);
+    if (!result.ok) {
+      toast.show("error", result.description);
+      return;
     }
-    setConfirming(null);
-    refetch();
+    setRemove(null);
+    toast.show("success", "Saved setup removed.");
+    await refetch();
   }
-
   return (
     <div className="content-container">
       <PageHero
-        title="Saved Task Templates"
-        subtitle="Reusable task configurations you can restart with one click"
+        title="Saved setups"
+        subtitle="Reuse your bot, chats, and copy preferences for a new task."
       />
-
-      <div className="card">
-        {loading && <div className="skeleton-row" />}
-        {!loading && saved?.length === 0 && (
-          <p className="text-muted" style={{ fontSize: 13, textAlign: "center", padding: "24px 0" }}>
-            No saved templates yet — use "Save & Start" when creating a task to keep a reusable template here.
-          </p>
+      <section className="card">
+        {error && (
+          <div className="alert alert-error" role="alert">
+            {error}
+            <button
+              className="button button-secondary"
+              onClick={() => void refetch()}
+            >
+              Retry
+            </button>
+          </div>
         )}
-        {saved?.map((s) => (
-          <div key={s.id} className="task-item" style={{ cursor: "default" }}>
-            <div className="task-name">
-              <span>
-                {s.bot_label} <span className="text-muted">@{s.bot_username}</span>
-              </span>
-              <div className="row" style={{ gap: 6 }}>
-                <button className="btn btn-primary btn-sm" onClick={() => navigate(`wizard/from/${s.id}`)}>
-                  Restart Task
-                </button>
-                <button className="btn btn-danger btn-sm" onClick={() => setConfirming(s)}>
-                  Delete
+        {loading && <div className="loading-state">Loading saved setups…</div>}
+        {!loading && !error && !data?.length && (
+          <div className="empty-state">
+            <span className="empty-icon">
+              <Icon name="save" size={30} />
+            </span>
+            <h2>No saved setups</h2>
+            <p>
+              Select “Save this setup” when creating a task. It will be ready
+              here whenever you need it.
+            </p>
+            <a className="button button-primary" href="#wizard">
+              Create a task
+              <Icon name="arrow-right" />
+            </a>
+          </div>
+        )}
+        <div className="task-list">
+          {data?.map((item) => (
+            <article className="task-row" key={item.id}>
+              <div className="task-icon">
+                <Icon name="save" />
+              </div>
+              <div className="task-main">
+                <h2 className="task-title">
+                  {item.source_chat_title || item.source_chat_id}{" "}
+                  <Icon name="arrow-right" size={17} />
+                  {item.dest_chat_title || item.dest_chat_id}
+                </h2>
+                <div className="task-meta">
+                  <span>@{item.bot_username}</span>
+                  <span>{SCOPE_LABELS[item.scope]}</span>
+                  {item.backfill_mode && (
+                    <span>
+                      {item.backfill_mode === "lastN"
+                        ? `${item.n} recent message IDs`
+                        : `IDs ${item.start_id}–${item.end_id}`}
+                    </span>
+                  )}
+                </div>
+              </div>
+              <div className="task-actions">
+                <a
+                  href={`#wizard/from/${item.id}`}
+                  className="button button-secondary button-sm"
+                >
+                  Use setup
+                  <Icon name="arrow-right" size={15} />
+                </a>
+                <button
+                  className="icon-button"
+                  aria-label="Remove saved setup"
+                  onClick={() => setRemove(item)}
+                >
+                  <Icon name="trash" />
                 </button>
               </div>
-            </div>
-            <div className="task-detail">
-              <span>{s.source_chat_title ?? s.source_chat_id} → {s.dest_chat_title ?? s.dest_chat_id}</span>
-            </div>
-            <div className="task-detail">
-              <span>{s.token_preview}</span>
-              <span>·</span>
-              <span>{summarize(s)}</span>
-              <span>·</span>
-              <span>Saved {new Date(s.created_at * 1000).toLocaleDateString()}</span>
-              {s.task_id && <span> · linked to active task</span>}
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {confirming && (
-        <div className="card" style={{ borderColor: "var(--danger)" }}>
-          <div className="card-header">
-            <div className="card-title" style={{ color: "var(--danger)" }}>Confirm Delete</div>
-          </div>
-          <p style={{ marginBottom: 16 }}>
-            Delete the saved template <strong>{confirming.bot_label}</strong>? This only removes the template — it will
-            not affect any running bot or live task.
-          </p>
-          <div className="row">
-            <button className="btn btn-danger" onClick={confirmDelete}>
-              Delete template
-            </button>
-            <button className="btn btn-secondary" onClick={() => setConfirming(null)}>
-              Cancel
-            </button>
-          </div>
+            </article>
+          ))}
         </div>
+      </section>
+      {remove && (
+        <Modal
+          title="Remove saved setup?"
+          busy={busy}
+          onClose={() => setRemove(null)}
+          actions={
+            <>
+              <button
+                className="button button-secondary"
+                onClick={() => setRemove(null)}
+                disabled={busy}
+              >
+                Keep setup
+              </button>
+              <button
+                className="button button-danger"
+                onClick={() => void deleteSaved()}
+                disabled={busy}
+              >
+                {busy ? "Removing…" : "Remove setup"}
+              </button>
+            </>
+          }
+        >
+          <p>
+            This removes the saved preferences. Your running tasks and copied
+            messages will stay unchanged.
+          </p>
+        </Modal>
       )}
     </div>
   );

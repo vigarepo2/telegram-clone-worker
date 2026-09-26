@@ -1,3 +1,4 @@
+import { invalid, positiveInteger, validChatId } from "./validation";
 import { TelegramClient, type PromoteRights } from "../../telegram/client";
 import { toResult } from "../../telegram/errors";
 import { deriveCapabilities } from "../../telegram/capabilities";
@@ -6,13 +7,20 @@ import { resolveLastN } from "../../jobs/resolveRange";
 import type { ChatLookupResult } from "../../shared/rpcTypes";
 
 function json(data: unknown, status = 200): Response {
-  return new Response(JSON.stringify(data), { status, headers: { "content-type": "application/json" } });
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: { "content-type": "application/json" },
+  });
 }
 
 /** botId looks up an already-saved bot's token in the DB; token is the raw
  * token for a bot the task wizard hasn't saved yet (see handleVerifyBot) —
  * exactly one of the two is expected to be set. */
-async function loadClient(env: Env, botId: string, token: string): Promise<TelegramClient | null> {
+async function loadClient(
+  env: Env,
+  botId: string,
+  token: string,
+): Promise<TelegramClient | null> {
   if (token) return new TelegramClient(token);
   if (!botId) return null;
   const bot = await getBotWithSecrets(env.DB, botId);
@@ -32,12 +40,31 @@ async function loadClientAndBotId(
   }
   if (!botId) return null;
   const bot = await getBotWithSecrets(env.DB, botId);
-  return bot ? { client: new TelegramClient(bot.token), botTelegramId: bot.bot_id } : null;
+  return bot
+    ? { client: new TelegramClient(bot.token), botTelegramId: bot.bot_id }
+    : null;
 }
 
-export async function handleGetChat(env: Env, chatId: string, botId: string, token: string, botTelegramId: string): Promise<Response> {
+export async function handleGetChat(
+  env: Env,
+  chatId: string,
+  botId: string,
+  token: string,
+  botTelegramId: string,
+): Promise<Response> {
+  if (!validChatId(chatId))
+    return invalid("Enter a valid chat ID or @username.");
   const loaded = await loadClientAndBotId(env, botId, token, botTelegramId);
-  if (!loaded) return json({ ok: false, errorCode: 404, description: "bot not found", reason: "invalid_request" }, 404);
+  if (!loaded)
+    return json(
+      {
+        ok: false,
+        errorCode: 404,
+        description: "bot not found",
+        reason: "invalid_request",
+      },
+      404,
+    );
   const { client, botTelegramId: telegramId } = loaded;
 
   const result = await toResult(async (): Promise<ChatLookupResult> => {
@@ -56,7 +83,8 @@ export async function handleGetChat(env: Env, chatId: string, botId: string, tok
       const adminData = await client.getChatAdministrators(chatId);
       admins = adminData.map((a) => ({
         id: a.user.id,
-        name: a.user.first_name + (a.user.username ? ` (@${a.user.username})` : ""),
+        name:
+          a.user.first_name + (a.user.username ? ` (@${a.user.username})` : ""),
         status: a.status,
         is_bot: a.user.is_bot,
       }));
@@ -64,10 +92,18 @@ export async function handleGetChat(env: Env, chatId: string, botId: string, tok
       // ignore
     }
 
-    const pastTasks = await listTasksForSourceChat(env.DB, [chatId, String(chat.id)]);
+    const pastTasks = await listTasksForSourceChat(env.DB, [
+      chatId,
+      String(chat.id),
+    ]);
 
     return {
-      chat: { id: chat.id, type: chat.type, title: chat.title, username: chat.username },
+      chat: {
+        id: chat.id,
+        type: chat.type,
+        title: chat.title,
+        username: chat.username,
+      },
       botStatus: member.status,
       capabilities: deriveCapabilities(member, chat.type),
       memberCount,
@@ -78,30 +114,103 @@ export async function handleGetChat(env: Env, chatId: string, botId: string, tok
   return json(result, result.ok ? 200 : 400);
 }
 
-export async function handleInviteLink(env: Env, chatId: string, botId: string, token: string): Promise<Response> {
+export async function handleInviteLink(
+  env: Env,
+  chatId: string,
+  botId: string,
+  token: string,
+): Promise<Response> {
+  if (!validChatId(chatId))
+    return invalid("Enter a valid chat ID or @username.");
   const client = await loadClient(env, botId, token);
-  if (!client) return json({ ok: false, errorCode: 404, description: "bot not found", reason: "invalid_request" }, 404);
+  if (!client)
+    return json(
+      {
+        ok: false,
+        errorCode: 404,
+        description: "bot not found",
+        reason: "invalid_request",
+      },
+      404,
+    );
   const result = await toResult(() => client.createChatInviteLink(chatId));
   return json(result, result.ok ? 200 : 400);
 }
 
-export async function handleRevokeInviteLink(env: Env, chatId: string, botId: string, inviteLink: string, token: string): Promise<Response> {
+export async function handleRevokeInviteLink(
+  env: Env,
+  chatId: string,
+  botId: string,
+  inviteLink: string,
+  token: string,
+): Promise<Response> {
+  if (!validChatId(chatId))
+    return invalid("Enter a valid chat ID or @username.");
   const client = await loadClient(env, botId, token);
-  if (!client) return json({ ok: false, errorCode: 404, description: "bot not found", reason: "invalid_request" }, 404);
-  const result = await toResult(() => client.revokeChatInviteLink(chatId, inviteLink));
+  if (!client)
+    return json(
+      {
+        ok: false,
+        errorCode: 404,
+        description: "bot not found",
+        reason: "invalid_request",
+      },
+      404,
+    );
+  const result = await toResult(() =>
+    client.revokeChatInviteLink(chatId, inviteLink),
+  );
   return json(result, result.ok ? 200 : 400);
 }
 
-export async function handleBan(env: Env, chatId: string, botId: string, userId: number, token: string): Promise<Response> {
+export async function handleBan(
+  env: Env,
+  chatId: string,
+  botId: string,
+  userId: number,
+  token: string,
+): Promise<Response> {
+  if (!validChatId(chatId))
+    return invalid("Enter a valid chat ID or @username.");
+  if (!positiveInteger(userId, Number.MAX_SAFE_INTEGER))
+    return invalid("Enter a valid Telegram user ID.");
   const client = await loadClient(env, botId, token);
-  if (!client) return json({ ok: false, errorCode: 404, description: "bot not found", reason: "invalid_request" }, 404);
+  if (!client)
+    return json(
+      {
+        ok: false,
+        errorCode: 404,
+        description: "bot not found",
+        reason: "invalid_request",
+      },
+      404,
+    );
   const result = await toResult(() => client.banChatMember(chatId, userId));
   return json(result, result.ok ? 200 : 400);
 }
 
-export async function handleUnban(env: Env, chatId: string, botId: string, userId: number, token: string): Promise<Response> {
+export async function handleUnban(
+  env: Env,
+  chatId: string,
+  botId: string,
+  userId: number,
+  token: string,
+): Promise<Response> {
+  if (!validChatId(chatId))
+    return invalid("Enter a valid chat ID or @username.");
+  if (!positiveInteger(userId, Number.MAX_SAFE_INTEGER))
+    return invalid("Enter a valid Telegram user ID.");
   const client = await loadClient(env, botId, token);
-  if (!client) return json({ ok: false, errorCode: 404, description: "bot not found", reason: "invalid_request" }, 404);
+  if (!client)
+    return json(
+      {
+        ok: false,
+        errorCode: 404,
+        description: "bot not found",
+        reason: "invalid_request",
+      },
+      404,
+    );
   const result = await toResult(() => client.unbanChatMember(chatId, userId));
   return json(result, result.ok ? 200 : 400);
 }
@@ -114,15 +223,68 @@ export async function handlePromote(
   rights: PromoteRights,
   token: string,
 ): Promise<Response> {
+  if (!validChatId(chatId))
+    return invalid("Enter a valid chat ID or @username.");
+  if (!positiveInteger(userId, Number.MAX_SAFE_INTEGER))
+    return invalid("Enter a valid Telegram user ID.");
   const client = await loadClient(env, botId, token);
-  if (!client) return json({ ok: false, errorCode: 404, description: "bot not found", reason: "invalid_request" }, 404);
-  const result = await toResult(() => client.promoteChatMember(chatId, userId, rights));
+  if (!client)
+    return json(
+      {
+        ok: false,
+        errorCode: 404,
+        description: "bot not found",
+        reason: "invalid_request",
+      },
+      404,
+    );
+  const allowedRights = new Set([
+    "can_delete_messages",
+    "can_restrict_members",
+    "can_invite_users",
+    "can_promote_members",
+    "can_change_info",
+    "can_pin_messages",
+    "can_manage_chat",
+  ]);
+  if (
+    !rights ||
+    typeof rights !== "object" ||
+    Array.isArray(rights) ||
+    Object.entries(rights).some(
+      ([key, value]) => !allowedRights.has(key) || typeof value !== "boolean",
+    )
+  ) {
+    return invalid("Choose valid administrator permissions.");
+  }
+  const result = await toResult(() =>
+    client.promoteChatMember(chatId, userId, rights),
+  );
   return json(result, result.ok ? 200 : 400);
 }
 
-export async function handleSendTestMessage(env: Env, chatId: string, botId: string, text: string, token: string): Promise<Response> {
+export async function handleSendTestMessage(
+  env: Env,
+  chatId: string,
+  botId: string,
+  text: string,
+  token: string,
+): Promise<Response> {
+  if (!validChatId(chatId))
+    return invalid("Enter a valid chat ID or @username.");
+  if (typeof text !== "string" || !text.trim() || text.length > 4096)
+    return invalid("Enter a message from 1 to 4,096 characters.");
   const client = await loadClient(env, botId, token);
-  if (!client) return json({ ok: false, errorCode: 404, description: "bot not found", reason: "invalid_request" }, 404);
+  if (!client)
+    return json(
+      {
+        ok: false,
+        errorCode: 404,
+        description: "bot not found",
+        reason: "invalid_request",
+      },
+      404,
+    );
   const result = await toResult(() => client.sendMessage(chatId, text));
   return json(result, result.ok ? 200 : 400);
 }
@@ -130,9 +292,25 @@ export async function handleSendTestMessage(env: Env, chatId: string, botId: str
 /** Probe-and-delete trick: send a throwaway message to learn the chat's
  * current highest message id, then best-effort delete it. Deletion
  * failure is non-fatal — it's logged but doesn't fail the lookup. */
-export async function handleLatestMessageId(env: Env, chatId: string, botId: string, token: string): Promise<Response> {
+export async function handleLatestMessageId(
+  env: Env,
+  chatId: string,
+  botId: string,
+  token: string,
+): Promise<Response> {
+  if (!validChatId(chatId))
+    return invalid("Enter a valid chat ID or @username.");
   const client = await loadClient(env, botId, token);
-  if (!client) return json({ ok: false, errorCode: 404, description: "bot not found", reason: "invalid_request" }, 404);
+  if (!client)
+    return json(
+      {
+        ok: false,
+        errorCode: 404,
+        description: "bot not found",
+        reason: "invalid_request",
+      },
+      404,
+    );
 
   const result = await toResult(async () => {
     const { endId, cleanupOk } = await resolveLastN(client, chatId, 1);
@@ -150,11 +328,28 @@ export async function handleAdHocTestCopy(
   botId: string,
   destChatId: string,
   token: string,
-  messageId?: number
+  messageId?: number,
 ): Promise<Response> {
+  if (
+    !validChatId(sourceChatId) ||
+    !validChatId(destChatId) ||
+    sourceChatId === destChatId
+  )
+    return invalid("Enter a valid chat ID or @username.");
   const client = await loadClient(env, botId, token);
-  if (!client) return json({ ok: false, errorCode: 404, description: "bot not found", reason: "invalid_request" }, 404);
+  if (!client)
+    return json(
+      {
+        ok: false,
+        errorCode: 404,
+        description: "bot not found",
+        reason: "invalid_request",
+      },
+      404,
+    );
 
+  if (messageId !== undefined && !positiveInteger(messageId))
+    return invalid("Enter a valid message ID.");
   const result = await toResult(async () => {
     let copyId = messageId;
     if (!copyId) {

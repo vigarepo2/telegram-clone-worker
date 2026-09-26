@@ -1,136 +1,90 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from "react";
-import type { AuthMode, AuthSource, AuthStatusResponse, AuthLoginResponse } from "../../shared/rpcTypes";
-import { api, clearAuthToken, getAuthToken, setAuthToken } from "./api";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useState,
+  type ReactNode,
+} from "react";
+import { api } from "./api";
 
-const SKIP_SETUP_KEY = "tg_auth_skip_setup";
-
-interface AuthContextValue {
-  mode: AuthMode;
-  source: AuthSource;
+type Status = {
+  mode: "enforced" | "setup_required";
+  source: "env" | "d1" | "none";
   authenticated: boolean;
+  setupCodeRequired?: boolean;
+};
+type Outcome = { ok: boolean; error?: string };
+interface AuthContextValue extends Status {
   loading: boolean;
-  skippedSetup: boolean;
-  login: (password: string) => Promise<{ ok: boolean; error?: string }>;
-  setup: (password: string) => Promise<{ ok: boolean; error?: string }>;
-  skipSetup: () => void;
-  logout: () => void;
-  removePassword: () => Promise<{ ok: boolean; error?: string }>;
+  error: string | null;
+  login: (password: string) => Promise<Outcome>;
+  setup: (password: string, setupCode: string) => Promise<Outcome>;
+  logout: () => Promise<void>;
   refreshStatus: () => Promise<void>;
 }
-
 const AuthContext = createContext<AuthContextValue | null>(null);
-
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [mode, setMode] = useState<AuthMode>("open");
-  const [source, setSource] = useState<AuthSource>("none");
-  const [authenticated, setAuthenticated] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [skippedSetup, setSkippedSetup] = useState<boolean>(() => {
-    try {
-      return localStorage.getItem(SKIP_SETUP_KEY) === "true";
-    } catch {
-      return false;
-    }
+  const [status, setStatus] = useState<Status>({
+    mode: "enforced",
+    source: "none",
+    authenticated: false,
   });
-
-  const checkStatus = async () => {
-    try {
-      const res = await api.get<AuthStatusResponse>("/api/auth/status");
-      if (res.ok) {
-        setMode(res.data.mode);
-        setSource(res.data.source);
-        setAuthenticated(res.data.authenticated);
-      }
-    } catch {
-      // Fallback
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    checkStatus();
-
-    function onUnauthorized() {
-      setAuthenticated(false);
-    }
-
-    window.addEventListener("tg_auth_unauthorized", onUnauthorized);
-    return () => window.removeEventListener("tg_auth_unauthorized", onUnauthorized);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const refreshStatus = useCallback(async () => {
+    const result = await api.get<Status>("/api/auth/status");
+    if (result.ok) {
+      setStatus(result.data);
+      setError(null);
+    } else setError(result.description);
+    setLoading(false);
   }, []);
-
-  const login = async (password: string): Promise<{ ok: boolean; error?: string }> => {
-    const res = await api.post<AuthLoginResponse>("/api/auth/login", { password });
-    if (res.ok) {
-      setAuthToken(res.data.token);
-      setAuthenticated(true);
-      await checkStatus();
-      return { ok: true };
-    }
-    return { ok: false, error: res.description || "Invalid password" };
-  };
-
-  const setup = async (password: string): Promise<{ ok: boolean; error?: string }> => {
-    const res = await api.post<AuthLoginResponse>("/api/auth/setup", { password });
-    if (res.ok) {
-      setAuthToken(res.data.token);
-      setAuthenticated(true);
-      await checkStatus();
-      return { ok: true };
-    }
-    return { ok: false, error: res.description || "Failed to set password" };
-  };
-
-  const skipSetup = () => {
+  useEffect(() => {
+    // Retire old browser-stored credentials after upgrading.
     try {
-      localStorage.setItem(SKIP_SETUP_KEY, "true");
+      localStorage.removeItem("tg_auth_token");
+      localStorage.removeItem("tg_auth_skip_setup");
     } catch {
-      // ignore
+      /* Storage may be disabled. */
     }
-    setSkippedSetup(true);
-  };
-
-  const logout = () => {
-    clearAuthToken();
-    setAuthenticated(false);
-    checkStatus();
-  };
-
-  const removePassword = async (): Promise<{ ok: boolean; error?: string }> => {
-    const res = await api.post<{ status: string }>("/api/auth/remove");
-    if (res.ok) {
-      clearAuthToken();
-      await checkStatus();
-      return { ok: true };
-    }
-    return { ok: false, error: res.description || "Failed to remove password" };
-  };
-
+    void refreshStatus();
+    const expired = () =>
+      setStatus((value) => ({ ...value, authenticated: false }));
+    window.addEventListener("tg_auth_unauthorized", expired);
+    return () => window.removeEventListener("tg_auth_unauthorized", expired);
+  }, [refreshStatus]);
+  async function authenticate(path: string, body: unknown): Promise<Outcome> {
+    const result = await api.post(path, body);
+    if (!result.ok) return { ok: false, error: result.description };
+    await refreshStatus();
+    return { ok: true };
+  }
   return (
     <AuthContext.Provider
       value={{
-        mode,
-        source,
-        authenticated,
+        ...status,
         loading,
-        skippedSetup,
-        login,
-        setup,
-        skipSetup,
-        logout,
-        removePassword,
-        refreshStatus: checkStatus,
+        error,
+        refreshStatus,
+        login: (password) => authenticate("/api/auth/login", { password }),
+        setup: (password, setupCode) =>
+          authenticate("/api/auth/setup", { password, setupCode }),
+        logout: async () => {
+          const result = await api.post("/api/auth/logout");
+          if (result.ok) {
+            setStatus((value) => ({ ...value, authenticated: false }));
+            await refreshStatus();
+          } else setError(result.description);
+        },
       }}
     >
       {children}
     </AuthContext.Provider>
   );
 }
-
-export function useAuth(): AuthContextValue {
-  const ctx = useContext(AuthContext);
-  if (!ctx) {
-    throw new Error("useAuth must be used within an AuthProvider");
-  }
-  return ctx;
+export function useAuth() {
+  const value = useContext(AuthContext);
+  if (!value) throw new Error("Authentication is unavailable.");
+  return value;
 }

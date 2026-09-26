@@ -79,6 +79,8 @@ export type BackfillStatus =
   | "failed";
 
 export interface TaskSummary {
+  /** Optional feedback returned immediately after creating a task. */
+  notice?: string;
   id: string;
   bot_id: string;
   label: string;
@@ -182,20 +184,22 @@ export interface SavedTaskSummary {
 }
 
 export interface SavedTaskWithToken extends SavedTaskSummary {
-  bot_token: string;
+  /** Retained type name for compatibility; credentials never leave the server. */
+  existing_bot_id: string | null;
 }
 
 // Authentication
 
-export type AuthMode = "enforced" | "open";
+export type AuthMode = "enforced" | "setup_required";
 export type AuthSource = "env" | "d1" | "none";
 
 export interface AuthStatusResponse {
   mode: AuthMode;
   source: AuthSource;
   authenticated: boolean;
+  setupCodeRequired: boolean;
 }
 
 export interface AuthLoginResponse {
-  token: string;
+  authenticated: boolean;
 }

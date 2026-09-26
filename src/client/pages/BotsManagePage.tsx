@@ -1,151 +1,321 @@
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
 import { api } from "../lib/api";
 import { usePolling } from "../lib/usePolling";
+import { useTasks } from "../lib/useTasksContext";
 import { useToast } from "../components/Toast";
 import { PageHero } from "../components/PageHero";
 import { BotActivityModal } from "../components/BotActivityModal";
-import { navigate } from "../lib/router";
+import { Modal } from "../components/Modal";
+import { Icon } from "../components/Icon";
 import type { BotSummary, TaskSummary } from "../../shared/rpcTypes";
-
 export function BotsManagePage() {
-  const { data: bots, loading, refetch } = usePolling(() => api.get<BotSummary[]>("/api/bots"), 10000);
-  const [confirming, setConfirming] = useState<{ bot: BotSummary; taskCount: number } | null>(null);
-  const [renaming, setRenaming] = useState<string | null>(null);
-  const [renameValue, setRenameValue] = useState("");
-  const [inspectingBot, setInspectingBot] = useState<BotSummary | null>(null);
+  const {
+    data: bots,
+    loading,
+    error,
+    refetch,
+  } = usePolling(() => api.get<BotSummary[]>("/api/bots"), 15000);
+  const tasks = useTasks();
   const toast = useToast();
-
-  async function startDelete(bot: BotSummary) {
-    const res = await api.get<TaskSummary[]>(`/api/bots/${bot.id}/tasks`);
-    setConfirming({ bot, taskCount: res.ok ? res.data.length : 0 });
-  }
-
-  async function confirmDelete() {
-    if (!confirming) return;
-    const res = await api.del(`/api/bots/${confirming.bot.id}`);
-    if (res.ok) {
-      toast.show("success", `Deleted @${confirming.bot.bot_username} and its tasks`);
-    } else {
-      toast.show("error", res.description);
+  const [connect, setConnect] = useState(false);
+  const [token, setToken] = useState("");
+  const [label, setLabel] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [rename, setRename] = useState<BotSummary | null>(null);
+  const [remove, setRemove] = useState<{
+    bot: BotSummary;
+    count: number;
+  } | null>(null);
+  const [inspect, setInspect] = useState<BotSummary | null>(null);
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    setBusy(true);
+    setFormError("");
+    const result = rename
+      ? await api.patch(`/api/bots/${rename.id}`, { label: label.trim() })
+      : await api.post<BotSummary>("/api/bots", {
+          token: token.trim(),
+          label: label.trim() || undefined,
+        });
+    setBusy(false);
+    if (!result.ok) {
+      setFormError(result.description);
+      return;
     }
-    setConfirming(null);
-    refetch();
+    setConnect(false);
+    setRename(null);
+    setToken("");
+    setLabel("");
+    toast.show("success", rename ? "Bot name updated." : "Bot connected.");
+    await refetch();
   }
-
-  function startRename(bot: BotSummary) {
-    setRenaming(bot.id);
-    setRenameValue(bot.label);
-  }
-
-  async function saveRename(botId: string) {
-    if (!renameValue.trim()) return;
-    const res = await api.patch(`/api/bots/${botId}`, { label: renameValue.trim() });
-    if (res.ok) {
-      toast.show("success", "Bot note updated");
-      refetch();
-    } else {
-      toast.show("error", res.description);
+  async function prepareRemove(bot: BotSummary) {
+    setBusy(true);
+    const result = await api.get<TaskSummary[]>(`/api/bots/${bot.id}/tasks`);
+    setBusy(false);
+    if (!result.ok) {
+      toast.show("error", result.description);
+      return;
     }
-    setRenaming(null);
+    setRemove({ bot, count: result.data.length });
   }
-
+  async function deleteBot() {
+    if (!remove) return;
+    setBusy(true);
+    const result = await api.del(`/api/bots/${remove.bot.id}`);
+    setBusy(false);
+    if (!result.ok) {
+      toast.show("error", result.description);
+      return;
+    }
+    setRemove(null);
+    toast.show("success", "Bot and its tasks removed.");
+    await Promise.all([refetch(), tasks.refetch()]);
+  }
   return (
     <div className="content-container">
       <PageHero
-        title="Connected Bots"
-        subtitle="Rename or remove the bots connected to your tasks"
+        title="Connected bots"
+        subtitle="The Telegram bots that copy messages for you."
       >
-        <button className="btn btn-primary" onClick={() => navigate("wizard")}>
-          + Connect Bot
+        <button
+          className="button button-primary"
+          onClick={() => {
+            setConnect(true);
+            setLabel("");
+            setToken("");
+            setFormError("");
+          }}
+        >
+          <Icon name="plus" />
+          Connect bot
         </button>
       </PageHero>
-
-      <div className="card">
-        {loading && <div className="skeleton-row" />}
-        {!loading && bots?.length === 0 && (
-          <p className="text-muted" style={{ fontSize: 13, textAlign: "center", padding: "24px 0" }}>
-            No bots configured yet — add one from the task wizard.
-          </p>
-        )}
-        {bots?.map((bot) => (
-          <div key={bot.id} className="task-item" style={{ cursor: "default" }}>
-            <div className="task-name">
-              {renaming === bot.id ? (
-                <div className="row" style={{ flex: 1 }}>
-                  <input
-                    className="input"
-                    style={{ flex: 1 }}
-                    value={renameValue}
-                    onChange={(e) => setRenameValue(e.target.value)}
-                    placeholder="Note (e.g. which chat this bot handles)"
-                    autoFocus
-                  />
-                  <button className="btn btn-primary btn-sm" onClick={() => saveRename(bot.id)}>
-                    Save
-                  </button>
-                  <button className="btn btn-secondary btn-sm" onClick={() => setRenaming(null)}>
-                    Cancel
-                  </button>
-                </div>
-              ) : (
-                <>
-                  <span>
-                    {bot.label} <span className="text-muted">@{bot.bot_username}</span>
-                  </span>
-                  <div className="row" style={{ gap: 6 }}>
-                    <button
-                      className="btn btn-secondary btn-sm"
-                      onClick={() => setInspectingBot(bot)}
-                      title="Inspect what else this bot is doing"
-                    >
-                      🔍 Inspect
-                    </button>
-                    <button className="btn btn-secondary btn-sm" onClick={() => startRename(bot)}>
-                      Rename
-                    </button>
-                    <button className="btn btn-danger btn-sm" onClick={() => startDelete(bot)}>
-                      Delete
-                    </button>
-                  </div>
-                </>
-              )}
-            </div>
-            <div className="task-detail">
-              <span>Bot ID: {bot.bot_id}</span>
-              <span>·</span>
-              <span>Added: {new Date(bot.created_at * 1000).toLocaleDateString()}</span>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {confirming && (
-        <div className="card" style={{ borderColor: "var(--danger)" }}>
-          <div className="card-header">
-            <div className="card-title" style={{ color: "var(--danger)" }}>Confirm Delete</div>
-          </div>
-          <p style={{ marginBottom: 16 }}>
-            Delete <strong>@{confirming.bot.bot_username}</strong>? This removes its webhook and permanently deletes{" "}
-            <strong>{confirming.taskCount}</strong> task{confirming.taskCount === 1 ? "" : "s"} that use it. This cannot be
-            undone.
-          </p>
-          <div className="row">
-            <button className="btn btn-danger" onClick={confirmDelete}>
-              Delete bot and {confirming.taskCount} task{confirming.taskCount === 1 ? "" : "s"}
-            </button>
-            <button className="btn btn-secondary" onClick={() => setConfirming(null)}>
-              Cancel
-            </button>
-          </div>
+      {error && (
+        <div className="alert alert-error" role="alert">
+          {error}
+          <button
+            className="button button-secondary button-sm"
+            onClick={() => void refetch()}
+          >
+            Retry
+          </button>
         </div>
       )}
-
-      {inspectingBot && (
+      <section className="card">
+        {loading && <div className="loading-state">Loading bots…</div>}
+        {!loading && !error && !bots?.length && (
+          <div className="empty-state">
+            <span className="empty-icon">
+              <Icon name="bot" size={30} />
+            </span>
+            <h2>Connect your first bot</h2>
+            <p>
+              Create a bot with BotFather in Telegram, then paste its token
+              here.
+            </p>
+            <button
+              className="button button-primary"
+              onClick={() => setConnect(true)}
+            >
+              Connect bot
+              <Icon name="arrow-right" />
+            </button>
+          </div>
+        )}
+        <div className="task-list">
+          {bots?.map((bot) => (
+            <article className="task-row" key={bot.id}>
+              <div className="task-icon">
+                <Icon name="bot" />
+              </div>
+              <div className="task-main">
+                <h2 className="task-title">{bot.label || bot.bot_username}</h2>
+                <div className="task-meta">
+                  <a
+                    href={`https://t.me/${bot.bot_username}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    @{bot.bot_username}
+                  </a>
+                  <span>
+                    {tasks.tasks.filter((t) => t.bot_id === bot.id).length}{" "}
+                    tasks
+                  </span>
+                  <span>
+                    Added {new Date(bot.created_at * 1000).toLocaleDateString()}
+                  </span>
+                </div>
+              </div>
+              <div className="task-actions">
+                <button
+                  className="button button-secondary button-sm"
+                  onClick={() => setInspect(bot)}
+                >
+                  <Icon name="history" size={16} />
+                  Activity
+                </button>
+                <button
+                  className="icon-button"
+                  aria-label={`Rename ${bot.label}`}
+                  onClick={() => {
+                    setRename(bot);
+                    setLabel(bot.label);
+                    setFormError("");
+                  }}
+                >
+                  <Icon name="edit" />
+                </button>
+                <button
+                  className="icon-button"
+                  aria-label={`Remove ${bot.label}`}
+                  disabled={busy}
+                  onClick={() => void prepareRemove(bot)}
+                >
+                  <Icon name="trash" />
+                </button>
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
+      <div className="helper row">
+        <Icon name="info" size={16} />
+        <span>
+          To copy channel messages, add your bot as an administrator in both
+          chats.
+        </span>
+      </div>
+      {(connect || rename) && (
+        <Modal
+          title={rename ? "Rename bot" : "Connect a Telegram bot"}
+          busy={busy}
+          onClose={() => {
+            setConnect(false);
+            setRename(null);
+            setToken("");
+          }}
+        >
+          <form className="stack" onSubmit={save}>
+            {!rename && (
+              <>
+                <p className="text-muted">
+                  Open{" "}
+                  <a
+                    href="https://t.me/BotFather"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    BotFather
+                  </a>{" "}
+                  in Telegram and use /newbot to get a token.
+                </p>
+                <div className="field">
+                  <label className="form-label" htmlFor="bot-token">
+                    Bot token
+                  </label>
+                  <input
+                    id="bot-token"
+                    className="input"
+                    type="password"
+                    value={token}
+                    onChange={(e) => setToken(e.target.value)}
+                    autoComplete="off"
+                    spellCheck={false}
+                    required
+                    disabled={busy}
+                  />
+                  <p className="helper">
+                    Your token is stored on your own deployment.
+                  </p>
+                </div>
+              </>
+            )}
+            <div className="field">
+              <label className="form-label" htmlFor="bot-name">
+                Name {!rename && <span className="text-muted">(optional)</span>}
+              </label>
+              <input
+                id="bot-name"
+                className="input"
+                value={label}
+                maxLength={120}
+                onChange={(e) => setLabel(e.target.value)}
+                placeholder="For example, News channel"
+                required={!!rename}
+                disabled={busy}
+              />
+            </div>
+            {formError && (
+              <div className="alert alert-error" role="alert">
+                {formError}
+              </div>
+            )}
+            <div className="dialog-actions">
+              <button
+                type="button"
+                className="button button-secondary"
+                disabled={busy}
+                onClick={() => {
+                  setConnect(false);
+                  setRename(null);
+                  setToken("");
+                }}
+              >
+                Cancel
+              </button>
+              <button className="button button-primary" disabled={busy}>
+                {busy ? "Saving…" : rename ? "Save name" : "Connect bot"}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
+      {remove && (
+        <Modal
+          title="Remove this bot?"
+          busy={busy}
+          onClose={() => setRemove(null)}
+          actions={
+            <>
+              <button
+                className="button button-secondary"
+                disabled={busy}
+                onClick={() => setRemove(null)}
+              >
+                Keep bot
+              </button>
+              <button
+                className="button button-danger"
+                disabled={busy}
+                onClick={() => void deleteBot()}
+              >
+                {busy ? "Removing…" : "Remove bot"}
+              </button>
+            </>
+          }
+        >
+          <p>
+            This will remove <strong>@{remove.bot.bot_username}</strong> and
+            permanently delete its{" "}
+            <strong>
+              {remove.count} {remove.count === 1 ? "task" : "tasks"}
+            </strong>
+            .
+          </p>
+          <p className="text-muted">
+            Messages already copied to Telegram will stay there.
+          </p>
+        </Modal>
+      )}
+      {inspect && (
         <BotActivityModal
-          botId={inspectingBot.id}
-          botUsername={inspectingBot.bot_username}
-          onClose={() => setInspectingBot(null)}
-          onWebhookDisconnected={() => refetch()}
+          botId={inspect.id}
+          botUsername={inspect.bot_username}
+          onClose={() => setInspect(null)}
+          onWebhookDisconnected={() => void refetch()}
         />
       )}
     </div>

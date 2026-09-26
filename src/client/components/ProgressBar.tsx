@@ -1,41 +1,28 @@
 export function ProgressBar({
-  processed,
-  total,
+  processed = 0,
+  total = 0,
   failed = 0,
 }: {
   processed?: number | null;
   total?: number | null;
   failed?: number | null;
 }) {
-  const p = processed ?? 0;
-  const f = failed ?? 0;
-  const t = total ?? 0;
-  const scanned = p + f;
-  const pct = t > 0 ? Math.min(100, Math.round((scanned / t) * 100)) : 0;
+  const count = Math.min(total ?? 0, (processed ?? 0) + (failed ?? 0));
+  const percent = total ? Math.min(100, Math.round((count / total) * 100)) : 0;
   return (
-    <div>
-      <div className="progress-bar">
-        <div className="fill" style={{ width: `${pct}%` }} />
-      </div>
-      <div
-        className="text-muted"
-        style={{
-          fontSize: 12,
-          marginTop: 6,
-          display: "flex",
-          justifyContent: "space-between",
-          flexWrap: "wrap",
-          gap: 4,
-        }}
-      >
+    <div className="task-progress">
+      <progress
+        className="progress"
+        max={100}
+        value={percent}
+        aria-label="History scan progress"
+      />
+      <div className="progress-caption">
         <span>
-          {scanned.toLocaleString()} / {t.toLocaleString()} IDs scanned · {pct}%
+          {count.toLocaleString()} of {(total ?? 0).toLocaleString()} message
+          IDs checked
         </span>
-        {f > 0 && (
-          <span>
-            ({p.toLocaleString()} copied, {f.toLocaleString()} skipped)
-          </span>
-        )}
+        <span>{percent}%</span>
       </div>
     </div>
   );

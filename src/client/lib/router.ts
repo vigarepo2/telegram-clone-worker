@@ -1,48 +1,50 @@
 import { useEffect, useState } from "react";
-
 export type Route =
   | { type: "wizard"; fromSavedId?: string }
   | { type: "task"; taskId: string }
-  | { type: "paused" }
-  | { type: "completed" }
-  | { type: "bots" }
-  | { type: "saved-tasks" }
-  | { type: "empty" };
-
+  | {
+      type:
+        | "paused"
+        | "completed"
+        | "bots"
+        | "saved-tasks"
+        | "settings"
+        | "help"
+        | "empty";
+    };
 function parseHash(): Route {
-  const hash = window.location.hash.replace(/^#\/?/, "");
-  const parts = hash.split("/");
-  const kind = parts[0];
-  if (kind === "wizard") {
-    if (parts[1] === "from" && parts[2]) return { type: "wizard", fromSavedId: parts[2] };
-    return { type: "wizard" };
-  }
-  if (kind === "task" && parts[1]) return { type: "task", taskId: parts[1] };
-  if (kind === "paused") return { type: "paused" };
-  if (kind === "completed") return { type: "completed" };
-  if (kind === "bots") return { type: "bots" };
-  if (kind === "saved-tasks") return { type: "saved-tasks" };
+  const [kind, value, saved] = window.location.hash
+    .replace(/^#\/?/, "")
+    .split("/");
+  if (kind === "wizard")
+    return {
+      type: "wizard",
+      fromSavedId: value === "from" ? saved : undefined,
+    };
+  if (kind === "task" && value) return { type: "task", taskId: value };
+  if (
+    kind === "paused" ||
+    kind === "completed" ||
+    kind === "bots" ||
+    kind === "saved-tasks" ||
+    kind === "settings" ||
+    kind === "help"
+  )
+    return { type: kind };
   return { type: "empty" };
 }
-
 export function navigate(path: string) {
   window.location.hash = path;
 }
-
 export function useHashRoute(): Route {
-  const [route, setRoute] = useState<Route>(parseHash());
+  const [route, setRoute] = useState<Route>(parseHash);
   useEffect(() => {
-    const onChange = () => {
-      const next = parseHash();
-      const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-      if ("startViewTransition" in document && !reduceMotion) {
-        document.startViewTransition(() => setRoute(next));
-      } else {
-        setRoute(next);
-      }
+    const change = () => {
+      setRoute(parseHash());
+      window.scrollTo({ top: 0 });
     };
-    window.addEventListener("hashchange", onChange);
-    return () => window.removeEventListener("hashchange", onChange);
+    window.addEventListener("hashchange", change);
+    return () => window.removeEventListener("hashchange", change);
   }, []);
   return route;
 }

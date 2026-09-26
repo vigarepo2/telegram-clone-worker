@@ -1,17 +1,19 @@
 import type { CapabilityEntry } from "../../shared/rpcTypes";
-
-export function CapabilityChecklist({ capabilities }: { capabilities: CapabilityEntry[] }) {
+import { Icon } from "./Icon";
+export function CapabilityChecklist({
+  capabilities,
+}: {
+  capabilities: CapabilityEntry[];
+}) {
   return (
-    <ul style={{ listStyle: "none", display: "flex", flexDirection: "column", gap: 8 }}>
-      {capabilities.map((c) => (
-        <li key={c.key} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 13 }}>
-          <span style={{ color: c.available ? "var(--success)" : "var(--muted)" }}>{c.available ? "✓" : "✗"}</span>
+    <ul className="capability-list">
+      {capabilities.map((item) => (
+        <li key={item.key}>
+          <Icon name={item.available ? "check-circle" : "info"} />
           <span>
-            <span style={{ color: c.available ? "var(--ink)" : "var(--muted)" }}>{c.label}</span>
-            {!c.available && c.reason && (
-              <span className="text-muted" style={{ display: "block", fontSize: 12 }}>
-                {c.reason}
-              </span>
+            {item.label}
+            {!item.available && item.reason && (
+              <small className="text-muted">{item.reason}</small>
             )}
           </span>
         </li>

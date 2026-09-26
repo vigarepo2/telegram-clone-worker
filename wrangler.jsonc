@@ -9,19 +9,20 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "telegram-clone-worker-db"
-    }
+      "database_name": "telegram-clone-worker-db",
+      "database_id": "1b41441c-10d3-40fb-beba-08d8ab194fb5",
+    },
   ],
   "triggers": {
-    "crons": ["* * * * *"]
+    "crons": ["* * * * *"],
   },
   "assets": {
     "directory": "./dist/client",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": true
+    "run_worker_first": true,
   },
   "observability": {
-    "enabled": true
-  }
+    "enabled": true,
+  },
 }

@@ -2,13 +2,18 @@ import { useCallback, useState } from "react";
 import { api } from "../lib/api";
 import { usePolling } from "../lib/usePolling";
 import { useToast } from "../components/Toast";
-import { PageHero } from "../components/PageHero";
+import { Icon } from "../components/Icon";
+import { Modal } from "../components/Modal";
 import { Badge } from "../components/Badge";
-import { PermissionErrorBanner } from "../components/PermissionErrorBanner";
 import { navigate } from "../lib/router";
 import { useTasks, getTaskDisplayInfo } from "../lib/useTasksContext";
-import { formatBytes, getMediaIcon } from "../../shared/messageFilter";
-import type { TaskDetail, TaskScope, TaskSummary } from "../../shared/rpcTypes";
+import { formatBytes } from "../../shared/messageFilter";
+import type {
+  ErrorReason,
+  TaskDetail,
+  TaskScope,
+  TaskSummary,
+} from "../../shared/rpcTypes";
 
 interface ActivityEntry {
   id: number;
@@ -19,22 +24,83 @@ interface ActivityEntry {
   at: number;
 }
 
+type TaskAction = Partial<{
+  liveEnabled: boolean;
+  backfillStatus: "running" | "paused" | "cancelled";
+}>;
+const scopeLabels: Record<TaskScope, string> = {
+  live: "New messages",
+  live_and_backfill: "Existing and new messages",
+  backfill_only: "Existing messages",
+};
+const stopMessages: Record<ErrorReason, string> = {
+  insufficient_permissions:
+    "Check that the bot is an administrator in both chats and can post in the destination, then retry.",
+  bot_not_in_chat: "Add the bot to both chats, then retry.",
+  rate_limited:
+    "Telegram has asked this bot to wait. Copying will resume after the waiting period.",
+  invalid_request:
+    "Telegram could not accept this request. Check the chat details and message range before retrying.",
+  unauthorized:
+    "The bot token is no longer valid. Reconnect it in Bots using a replacement token, then retry.",
+  unknown:
+    "Telegram could not complete the copy. Check the activity below, then retry.",
+};
+const mediaLabels: Record<string, string> = {
+  document: "Documents",
+  video: "Videos",
+  photo: "Photos",
+  audio: "Audio",
+};
+
+function positiveInteger(value: string): number | null {
+  if (!/^\d+$/.test(value.trim())) return null;
+  const number = Number(value);
+  return Number.isSafeInteger(number) && number > 0 ? number : null;
+}
+
+function dateTime(timestamp: number) {
+  return new Date(timestamp * 1000).toLocaleString();
+}
+
 export function TaskDetailPage({ taskId }: { taskId: string }) {
   const toast = useToast();
   const { refetch: refetchGlobalTasks } = useTasks();
-  const fetchTask = useCallback(() => api.get<TaskDetail>(`/api/tasks/${taskId}`), [taskId]);
-  const { data: task, loading, refetch } = usePolling(fetchTask, 4000, [taskId]);
-
-  const fetchActivity = useCallback(() => api.get<ActivityEntry[]>(`/api/tasks/${taskId}/activity`), [taskId]);
-  const { data: activity } = usePolling(fetchActivity, 5000, [taskId]);
-
-  const [testCopyResult, setTestCopyResult] = useState<string | null>(null);
+  const fetchTask = useCallback(
+    () => api.get<TaskDetail>(`/api/tasks/${encodeURIComponent(taskId)}`),
+    [taskId],
+  );
+  const {
+    data: loadedTask,
+    loading,
+    error: loadError,
+    refetch,
+  } = usePolling(fetchTask, 5000, [taskId]);
+  const task = loadedTask?.id === taskId ? loadedTask : null;
+  const fetchActivity = useCallback(
+    () =>
+      api.get<ActivityEntry[]>(
+        `/api/tasks/${encodeURIComponent(taskId)}/activity`,
+      ),
+    [taskId],
+  );
+  const { data: activity, error: activityError } = usePolling(
+    fetchActivity,
+    8000,
+    [taskId],
+  );
+  const [busy, setBusy] = useState(false);
+  const [confirmation, setConfirmation] = useState<"delete" | "cancel" | null>(
+    null,
+  );
+  const [testCopyResult, setTestCopyResult] = useState<{
+    ok: boolean;
+    message: string;
+  } | null>(null);
   const [testingCopy, setTestingCopy] = useState(false);
   const [testMessageId, setTestMessageId] = useState("");
-
-  // Edit Task Modal State
   const [isEditing, setIsEditing] = useState(false);
-  const [savingEdit, setSavingEdit] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
   const [editLabel, setEditLabel] = useState("");
   const [editScope, setEditScope] = useState<TaskScope>("live");
   const [editStartId, setEditStartId] = useState("");
@@ -50,679 +116,948 @@ export function TaskDetailPage({ taskId }: { taskId: string }) {
     if (!task) return;
     setEditLabel(task.label);
     setEditScope(task.scope);
-    setEditStartId(task.start_id != null ? String(task.start_id) : "");
-    setEditEndId(task.end_id != null ? String(task.end_id) : "");
-    setEditCursor(task.cursor != null ? String(task.cursor) : "");
+    setEditStartId(task.start_id == null ? "" : String(task.start_id));
+    setEditEndId(task.end_id == null ? "" : String(task.end_id));
+    setEditCursor(task.cursor == null ? "" : String(task.cursor));
     setResetProgress(false);
-
-    const hasAnyFilter = Boolean(task.filter_media_types || task.filter_min_size_bytes || task.filter_max_size_bytes);
-    setEnableFilters(hasAnyFilter);
-    setFilterMediaTypes(task.filter_media_types ? task.filter_media_types.split(",").map((t) => t.trim()).filter(Boolean) : []);
-    setMinFileSizeMb(task.filter_min_size_bytes ? String(Math.round(task.filter_min_size_bytes / (1024 * 1024))) : "");
-    setMaxFileSizeMb(task.filter_max_size_bytes ? String(Math.round(task.filter_max_size_bytes / (1024 * 1024))) : "");
-
+    setEnableFilters(
+      Boolean(
+        task.filter_media_types ||
+        task.filter_min_size_bytes != null ||
+        task.filter_max_size_bytes != null,
+      ),
+    );
+    setFilterMediaTypes(
+      task.filter_media_types
+        ?.split(",")
+        .map((value) => value.trim())
+        .filter(Boolean) ?? [],
+    );
+    setMinFileSizeMb(
+      task.filter_min_size_bytes == null
+        ? ""
+        : String(task.filter_min_size_bytes / (1024 * 1024)),
+    );
+    setMaxFileSizeMb(
+      task.filter_max_size_bytes == null
+        ? ""
+        : String(task.filter_max_size_bytes / (1024 * 1024)),
+    );
+    setEditError(null);
     setIsEditing(true);
   }
 
-  async function handleSaveEdit() {
-    if (!task) return;
-
-    const wantsBackfill = editScope === "backfill_only" || editScope === "live_and_backfill";
-    const wantsLive = editScope === "live" || editScope === "live_and_backfill";
-
-    let startId: number | null = null;
-    let endId: number | null = null;
-    let cursor: number | null = null;
-
-    if (wantsBackfill) {
-      if (!editStartId || !editEndId) {
-        toast.show("error", "Start ID and End ID are required for backfill");
-        return;
-      }
-      startId = Number(editStartId);
-      endId = Number(editEndId);
-      if (isNaN(startId) || isNaN(endId)) {
-        toast.show("error", "Start ID and End ID must be valid numbers");
-        return;
-      }
-      if (startId > endId) {
-        toast.show("error", "Start ID cannot be greater than End ID");
-        return;
-      }
-      if (editCursor && !resetProgress) {
-        cursor = Number(editCursor);
-        if (isNaN(cursor)) {
-          toast.show("error", "Cursor must be a valid number");
-          return;
-        }
-      }
-    }
-
-    const minBytes = wantsLive && enableFilters && minFileSizeMb ? Math.round(Number(minFileSizeMb) * 1024 * 1024) : null;
-    const maxBytes = wantsLive && enableFilters && maxFileSizeMb ? Math.round(Number(maxFileSizeMb) * 1024 * 1024) : null;
-    const mediaTypesStr = wantsLive && enableFilters && filterMediaTypes.length > 0 ? filterMediaTypes.join(",") : null;
-
-    setSavingEdit(true);
-    const res = await api.patch<TaskSummary>(`/api/tasks/${taskId}`, {
-      label: editLabel.trim() || undefined,
-      scope: editScope,
-      startId,
-      endId,
-      cursor,
-      resetProgress,
-      filterMediaTypes: mediaTypesStr,
-      filterMinSizeBytes: minBytes,
-      filterMaxSizeBytes: maxBytes,
-    });
-    setSavingEdit(false);
-
-    if (res.ok) {
-      toast.show("success", "Task updated successfully");
-      setIsEditing(false);
-      refetch();
-      refetchGlobalTasks();
-    } else {
-      toast.show("error", res.description);
-    }
+  async function refreshTasks() {
+    await Promise.all([refetch(), refetchGlobalTasks()]);
   }
 
-  if (!task) {
-    if (loading) {
-      return (
-        <div className="content-container">
-          <div className="skeleton-row" />
-          <div className="skeleton-row" />
-        </div>
-      );
-    }
-    return (
-      <div className="content-container">
-        <div className="card" style={{ textAlign: "center", padding: "40px 20px" }}>
-          <h3 style={{ fontSize: 16, marginBottom: 8 }}>Task Not Found</h3>
-          <p className="text-muted" style={{ marginBottom: 20 }}>
-            This task could not be loaded or may have been deleted.
-          </p>
-          <button className="btn btn-primary" onClick={() => navigate("")}>
-            ← Back to Tasks
-          </button>
-        </div>
-      </div>
+  async function patch(body: TaskAction, message: string) {
+    if (busy) return;
+    setBusy(true);
+    const result = await api.patch<TaskSummary>(
+      `/api/tasks/${encodeURIComponent(taskId)}`,
+      body,
     );
+    if (result.ok) {
+      toast.show("success", message);
+      setConfirmation(null);
+      await refreshTasks();
+    } else {
+      toast.show("error", result.description);
+    }
+    setBusy(false);
   }
 
-  const isBackfillComplete = task.backfill_status === "complete";
-  const scannedCount = isBackfillComplete
-    ? (task.total ?? 0)
-    : Math.min(task.total ?? 0, (task.processed ?? 0) + (task.failed ?? 0));
-  const rangeScannedPct =
-    task.total && task.total > 0
-      ? Math.min(100, Math.round((scannedCount / task.total) * 100))
-      : 0;
-
-  async function patch(body: Partial<{ liveEnabled: boolean; backfillStatus: "running" | "paused" | "cancelled" }>) {
-    const res = await api.patch<TaskSummary>(`/api/tasks/${taskId}`, body);
-    if (res.ok) {
-      refetch();
-      refetchGlobalTasks();
-    } else {
-      toast.show("error", res.description);
+  async function handleSaveEdit() {
+    if (!task || busy) return;
+    setEditError(null);
+    const wantsHistory = editScope !== "live";
+    const wantsFilters = editScope !== "backfill_only" && enableFilters;
+    const startId = wantsHistory ? positiveInteger(editStartId) : null;
+    const endId = wantsHistory ? positiveInteger(editEndId) : null;
+    const cursor =
+      wantsHistory && editCursor.trim() && !resetProgress
+        ? positiveInteger(editCursor)
+        : null;
+    if (wantsHistory && (startId == null || endId == null)) {
+      setEditError(
+        "Enter a positive whole number for the first and last message IDs.",
+      );
+      return;
     }
+    if (startId != null && endId != null && startId > endId) {
+      setEditError(
+        "The last message ID must be the same as or greater than the first.",
+      );
+      return;
+    }
+    if (
+      wantsHistory &&
+      editCursor.trim() &&
+      !resetProgress &&
+      (cursor == null || cursor < startId! || cursor > endId! + 1)
+    ) {
+      setEditError(
+        "The next message ID must fall within the range, or immediately after its last message.",
+      );
+      return;
+    }
+    const minBytes =
+      wantsFilters && minFileSizeMb.trim()
+        ? Math.round(Number(minFileSizeMb) * 1024 * 1024)
+        : null;
+    const maxBytes =
+      wantsFilters && maxFileSizeMb.trim()
+        ? Math.round(Number(maxFileSizeMb) * 1024 * 1024)
+        : null;
+    if (
+      [minBytes, maxBytes].some(
+        (value) => value != null && (!Number.isSafeInteger(value) || value < 0),
+      )
+    ) {
+      setEditError("File sizes must be zero or a positive number.");
+      return;
+    }
+    if (minBytes != null && maxBytes != null && minBytes > maxBytes) {
+      setEditError("The maximum file size must be at least the minimum.");
+      return;
+    }
+    setBusy(true);
+    const result = await api.patch<TaskSummary>(
+      `/api/tasks/${encodeURIComponent(taskId)}`,
+      {
+        label: editLabel.trim() || getTaskDisplayInfo(task).routeText,
+        ...(editScope !== task.scope ? { scope: editScope } : {}),
+        startId,
+        endId,
+        ...(cursor != null ? { cursor } : {}),
+        resetProgress: wantsHistory && resetProgress,
+        filterMediaTypes:
+          wantsFilters && filterMediaTypes.length
+            ? filterMediaTypes.join(",")
+            : null,
+        filterMinSizeBytes: minBytes,
+        filterMaxSizeBytes: maxBytes,
+      },
+    );
+    if (result.ok) {
+      toast.show("success", "Task updated");
+      setIsEditing(false);
+      await refreshTasks();
+    } else {
+      setEditError(result.description);
+    }
+    setBusy(false);
   }
 
   async function runTestCopy() {
-    if (!task) return;
+    if (!task || testingCopy) return;
+    const messageId = testMessageId.trim()
+      ? positiveInteger(testMessageId)
+      : undefined;
+    if (messageId === null) {
+      setTestCopyResult({
+        ok: false,
+        message: "Enter a positive whole message ID, or leave the field empty.",
+      });
+      return;
+    }
     setTestingCopy(true);
     setTestCopyResult(null);
-    const res = await api.post<{ message_id: number }>(`/api/bots/${task.bot_id}/tasks/${task.id}/test-copy`, {
-      messageId: testMessageId ? Number(testMessageId) : undefined,
-    });
-    setTestingCopy(false);
+    const result = await api.post<{ message_id: number }>(
+      `/api/bots/${encodeURIComponent(task.bot_id)}/tasks/${encodeURIComponent(task.id)}/test-copy`,
+      { messageId },
+    );
     setTestCopyResult(
-      res.ok
-        ? `✓ Sent as message #${res.data.message_id} in destination`
-        : `✗ Failed: ${res.description}`,
+      result.ok
+        ? {
+            ok: true,
+            message: `Copied to the destination as message ${result.data.message_id}.`,
+          }
+        : { ok: false, message: result.description },
+    );
+    setTestingCopy(false);
+  }
+
+  async function removeTask() {
+    if (busy) return;
+    setBusy(true);
+    const result = await api.del(`/api/tasks/${encodeURIComponent(taskId)}`);
+    if (result.ok) {
+      toast.show("success", "Task deleted");
+      await refetchGlobalTasks();
+      navigate("");
+    } else {
+      toast.show("error", result.description);
+    }
+    setBusy(false);
+  }
+
+  if (!task) {
+    return (
+      <div className="content-container">
+        <button className="button button-ghost" onClick={() => navigate("")}>
+          <Icon name="arrow-left" />
+          Tasks
+        </button>
+        <div className="card empty-state" aria-busy={loading}>
+          <div className="empty-icon">
+            <Icon name={loading ? "clock" : "alert"} />
+          </div>
+          <h1 className="card-title">
+            {loading ? "Loading task…" : "Task unavailable"}
+          </h1>
+          <p className="text-muted">
+            {loading
+              ? "Getting the latest progress."
+              : loadError || "This task may have been deleted."}
+          </p>
+          {!loading && (
+            <button
+              className="button button-secondary"
+              onClick={() => void refetch()}
+            >
+              <Icon name="refresh" />
+              Try again
+            </button>
+          )}
+        </div>
+      </div>
     );
   }
 
-  const displayInfo = task ? getTaskDisplayInfo(task) : null;
-  const displayTitle = displayInfo?.title ?? task?.label ?? "";
-
-  async function removeTask() {
-    if (!task) return;
-    if (!confirm(`Delete task "${displayTitle}"? This can't be undone.`)) return;
-    const res = await api.del(`/api/tasks/${taskId}`);
-    if (res.ok) {
-      toast.show("success", "Task deleted");
-      refetchGlobalTasks();
-      navigate("");
-    } else {
-      toast.show("error", res.description);
-    }
-  }
+  const displayInfo = getTaskDisplayInfo(task);
+  const hasHistory = task.scope !== "live";
+  const hasLive = task.scope !== "backfill_only";
+  const complete = task.backfill_status === "complete";
+  const total = task.total ?? 0;
+  const scanned = complete
+    ? total
+    : Math.min(
+        total,
+        Math.max(
+          task.processed + task.failed,
+          (task.cursor ?? task.start_id ?? 0) - (task.start_id ?? 0),
+        ),
+      );
+  const progress =
+    total > 0 ? Math.min(100, Math.round((scanned / total) * 100)) : 0;
+  const historyRunning =
+    task.backfill_status === "running" || task.backfill_status === "pending";
+  const historyLabel = complete
+    ? "Complete"
+    : task.backfill_status === "cancelled"
+      ? "Cancelled"
+      : task.backfill_status === "failed"
+        ? "Failed"
+        : historyRunning
+          ? "Copying"
+          : "Paused";
+  const hasFilters = Boolean(
+    task.filter_media_types ||
+    task.filter_min_size_bytes != null ||
+    task.filter_max_size_bytes != null,
+  );
+  const retryBody: TaskAction = {
+    ...(hasLive ? { liveEnabled: true } : {}),
+    ...(hasHistory && !complete ? { backfillStatus: "running" as const } : {}),
+  };
 
   return (
-    <div className="content-container">
-      <PageHero
-        title={
-          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
-            <span>{displayTitle}</span>
-            {task.stop_reason ? (
-              <Badge variant="failed" label="Stopped" />
-            ) : task.scope === "live_and_backfill" ? (
-              <>
-                {task.backfill_status === "running" && <Badge variant="running" label="Backfilling" />}
-                {task.backfill_status === "complete" && <Badge variant="complete" label="Backfill Complete" />}
-                {task.live_enabled ? (
-                  <Badge variant="live" label="Live Forward" />
-                ) : (
-                  <Badge variant="paused" label="Live Paused" />
-                )}
-                {task.backfill_status === "paused" && <Badge variant="paused" label="Backfill Paused" />}
-              </>
-            ) : task.live_enabled ? (
-              <Badge variant="live" label="Live Forward" />
-            ) : task.backfill_status === "running" ? (
-              <Badge variant="running" label="Backfilling" />
-            ) : task.backfill_status === "paused" ? (
-              <Badge variant="paused" label="Paused" />
-            ) : task.backfill_status === "complete" ? (
-              <Badge variant="complete" label="Complete" />
-            ) : task.backfill_status === "cancelled" ? (
-              <Badge variant="idle" label="Cancelled" />
-            ) : !task.live_enabled && task.scope === "live" ? (
-              <Badge variant="paused" label="Live Paused" />
-            ) : (
-              <Badge variant="idle" label={task.backfill_status ?? "Idle"} />
-            )}
-          </div>
-        }
-        subtitle={`Scope: ${task.scope.replace(/_/g, " ")} · Created ${new Date(task.created_at * 1000).toLocaleString()}`}
-      >
-        <button className="btn btn-secondary btn-sm" onClick={() => navigate("")}>
-          ← Back to Tasks
-        </button>
-        {task.backfill_status === "running" && (
-          <button className="btn btn-secondary btn-sm" onClick={() => patch({ backfillStatus: "paused" })}>
-            Pause Backfill
-          </button>
-        )}
-        {task.backfill_status === "paused" && (
-          <button className="btn btn-primary btn-sm" onClick={() => patch({ backfillStatus: "running" })}>
-            Resume Backfill
-          </button>
-        )}
-        {task.scope === "live" && task.live_enabled && (
-          <button className="btn btn-secondary btn-sm" onClick={() => patch({ liveEnabled: false })}>
-            Pause Live
-          </button>
-        )}
-        {task.scope === "live" && !task.live_enabled && (
-          <button className="btn btn-primary btn-sm" onClick={() => patch({ liveEnabled: true })}>
-            Resume Live
-          </button>
-        )}
-        {task.scope === "live_and_backfill" && !task.live_enabled && task.backfill_status === "paused" && (
+    <div className="content-container stack">
+      <button className="button button-ghost" onClick={() => navigate("")}>
+        <Icon name="arrow-left" />
+        Tasks
+      </button>
+      <header className="page-header">
+        <div className="page-heading">
+          <h1 className="page-title">{displayInfo.title}</h1>
+          <p className="page-description">{scopeLabels[task.scope]}</p>
+        </div>
+        <div className="page-actions">
           <button
-            className="btn btn-primary btn-sm"
-            onClick={() => patch({ liveEnabled: true, backfillStatus: "running" })}
+            className="button button-secondary"
+            onClick={openEditModal}
+            disabled={busy}
           >
-            Resume All
+            <Icon name="edit" />
+            Edit task
           </button>
-        )}
-        <button className="btn btn-secondary btn-sm" onClick={openEditModal}>
-          ✏️ Edit Task
-        </button>
-        <button className="btn btn-danger btn-sm" onClick={removeTask}>
-          Delete
-        </button>
-      </PageHero>
+        </div>
+      </header>
 
-      {task.stop_reason && (
-        <div className="card">
-          <PermissionErrorBanner
-            reason={task.stop_reason}
-            description={`Telegram rejected requests from this bot as of ${
-              task.stopped_at ? new Date(task.stopped_at * 1000).toLocaleString() : "an unknown time"
-            }.`}
-          />
+      {loadError && (
+        <div className="alert alert-error" role="status">
+          Updates are unavailable. Showing the last loaded progress. {loadError}
         </div>
       )}
-
-      {/* Pipeline Execution Card (Zero Duplication) */}
-      <div className="card">
-        <div className="card-header">
-          <div className="card-title">Pipeline Execution</div>
-        </div>
-
-        <div style={{ display: "grid", gridTemplateColumns: task.scope === "backfill_only" || task.scope === "live" ? "1fr" : "repeat(auto-fit, minmax(300px, 1fr))", gap: 16 }}>
-          {/* Section 1: Historical Backfill (if applicable) */}
-          {task.scope !== "live" && (
-            <div style={{ background: "var(--surface-raised)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)", padding: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12, color: "var(--success)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span>📦 Historical Backfill</span>
-                <span className={`badge ${isBackfillComplete ? "badge-success" : task.backfill_status === "running" ? "badge-accent" : "badge-muted"}`} style={{ fontSize: 10, padding: "1px 6px" }}>
-                  {isBackfillComplete ? "100% Complete" : task.backfill_status === "running" ? "Running" : "Paused"}
-                </span>
+      {task.stop_reason && (
+        <div className="alert alert-error" role="status">
+          <div className="stack">
+            <strong>Copying has stopped</strong>
+            <p>{stopMessages[task.stop_reason]}</p>
+            {task.stop_reason !== "rate_limited" && (
+              <div>
+                <button
+                  className="button button-secondary button-sm"
+                  disabled={busy}
+                  onClick={() => void patch(retryBody, "Task restarted")}
+                >
+                  <Icon name="refresh" />
+                  Retry task
+                </button>
               </div>
-
-              {/* Progress bar */}
-              <div style={{ marginBottom: 12 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
-                  <span style={{ color: isBackfillComplete ? "var(--success)" : "var(--accent)" }}>
-                    {isBackfillComplete ? "✓ Range Scanned" : `${rangeScannedPct}% Range Scanned`}
-                  </span>
-                  <span className="text-muted" style={{ fontFamily: "var(--font-mono)" }}>
-                    {scannedCount.toLocaleString()} / {(task.total ?? 0).toLocaleString()} IDs
-                  </span>
-                </div>
-                <div style={{ height: 6, background: "var(--surface-hover)", borderRadius: "var(--radius-full)", overflow: "hidden" }}>
-                  <div
-                    style={{
-                      width: `${isBackfillComplete ? 100 : rangeScannedPct}%`,
-                      height: "100%",
-                      background: isBackfillComplete ? "var(--success)" : "var(--accent)",
-                      borderRadius: "var(--radius-full)",
-                      /* impeccable-disable-next-line layout-transition -- progress bar percentage */
-                      transition: "width 260ms cubic-bezier(0.16, 1, 0.3, 1)",
-                    }}
-                  />
-                </div>
-              </div>
-
-              <div style={{ fontSize: 12.5, color: "var(--muted)", lineHeight: 1.8 }}>
-                <div>Range: <strong style={{ color: "var(--ink)" }}>IDs {(task.start_id ?? 1).toLocaleString()} to {(task.end_id ?? 0).toLocaleString()}</strong> {task.cursor != null ? `(cursor at #${task.cursor.toLocaleString()})` : ""}</div>
-                <div>Messages Copied: <strong style={{ color: "var(--ink)" }}>{(task.processed ?? 0).toLocaleString()}</strong></div>
-                {task.failed > 0 && (
-                  <div style={{ fontSize: 11.5, color: "var(--text-dim)" }}>
-                    ({task.failed.toLocaleString()} empty or deleted message IDs skipped)
-                  </div>
-                )}
-                <div>Pacing: <strong style={{ color: "var(--ink)" }}>~{task.pacing_batch_size ?? 60} msgs/batch</strong></div>
-              </div>
-            </div>
-          )}
-
-          {/* Section 2: Live Forwarding (if applicable) */}
-          {task.scope !== "backfill_only" && (
-            <div style={{ background: "var(--surface-raised)", border: "1px solid var(--border-subtle)", borderRadius: "var(--radius)", padding: 16 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12, color: "var(--info)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-                <span>⚡ Live Auto-Sync</span>
-                <span className={`badge ${task.live_enabled ? "badge-accent" : "badge-muted"}`} style={{ fontSize: 10, padding: "1px 6px" }}>
-                  {task.live_enabled ? "Active (1m poll)" : "Paused"}
-                </span>
-              </div>
-
-              <div style={{ fontSize: 12.5, color: "var(--muted)", lineHeight: 1.8 }}>
-                <div>Forwarded: <strong style={{ color: "var(--ink)" }}>{(task.live_processed ?? 0).toLocaleString()} messages</strong></div>
-                {task.live_skipped ? (
-                  <div>Filtered Out: <strong style={{ color: "var(--warning)" }}>{task.live_skipped.toLocaleString()} messages</strong></div>
-                ) : null}
-                {task.pending_count && task.pending_count > 0 ? (
-                  <div>Live Buffer: <strong style={{ color: "var(--info)" }}>{task.pending_count.toLocaleString()} queued</strong> {task.backfill_status === "running" ? "(waiting for backfill to finish)" : ""}</div>
-                ) : null}
-                {task.filter_media_types || task.filter_min_size_bytes || task.filter_max_size_bytes ? (
-                  <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--ink)", borderTop: "1px solid var(--border-subtle)", paddingTop: 8 }}>
-                    Filters: <strong>{task.filter_media_types ? task.filter_media_types.split(",").map((m) => getMediaIcon(m.trim())).join(", ") : "All media"}</strong>
-                    {task.filter_min_size_bytes ? ` (≥ ${formatBytes(task.filter_min_size_bytes)})` : ""}
-                    {task.filter_max_size_bytes ? ` (≤ ${formatBytes(task.filter_max_size_bytes)})` : ""}
-                  </div>
-                ) : (
-                  <div style={{ marginTop: 6, fontSize: 11.5, color: "var(--muted)", borderTop: "1px solid var(--border-subtle)", paddingTop: 8 }}>
-                    Filters: <em>None (forwarding all incoming messages)</em>
-                  </div>
-                )}
-                <div style={{ marginTop: 12 }}>
-                  <button
-                    className="btn btn-secondary btn-sm"
-                    disabled={!!task.stop_reason}
-                    onClick={() => patch({ liveEnabled: !task.live_enabled })}
-                  >
-                    {task.live_enabled ? "Pause Live" : "Resume Live"}
-                  </button>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-
-      {/* Task Specification Card */}
-      <div className="card">
-        <div className="card-header">
-          <div className="card-title">Task Specification</div>
-        </div>
-        <div className="task-spec-grid">
-          <div className="task-spec-item">
-            <div className="task-spec-label">Connected Bot</div>
-            <div className="task-spec-value">@{task.bot_username}</div>
-          </div>
-          <div className="task-spec-item">
-            <div className="task-spec-label">Source Chat</div>
-            <div className="task-spec-value">{task.source_chat_title || "Channel"}</div>
-            <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)", marginTop: 2 }}>{task.source_chat_id}</div>
-          </div>
-          <div className="task-spec-item">
-            <div className="task-spec-label">Destination Chat</div>
-            <div className="task-spec-value">{task.dest_chat_title || "Channel"}</div>
-            <div style={{ fontSize: 11, color: "var(--muted)", fontFamily: "var(--font-mono)", marginTop: 2 }}>{task.dest_chat_id}</div>
-          </div>
-          <div className="task-spec-item">
-            <div className="task-spec-label">Scope & Created</div>
-            <div className="task-spec-value">{task.scope.replace(/_/g, " ")}</div>
-            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>{new Date(task.created_at * 1000).toLocaleString()}</div>
+            )}
           </div>
         </div>
-      </div>
-
-      {/* Recent Activity & Diagnostic Hub */}
-      <div className="card">
-        <div className="card-header">
-          <div className="card-title">Recent Activity</div>
-        </div>
-        {!activity || activity.length === 0 ? (
-          <p className="text-muted" style={{ fontSize: 13 }}>
-            No activity logged yet.
-          </p>
-        ) : (
-          <div style={{ display: "flex", flexDirection: "column", gap: 8, fontFamily: "var(--font-mono)", fontSize: 12 }}>
-            {activity.map((entry) => {
-              const isFiltered = entry.error?.startsWith("Filtered:") || entry.detail?.includes("skipped:");
-              const isBufferQueue = entry.detail?.includes("Queued in buffer");
-              return (
-                <div key={entry.id} style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-                  <span style={{ color: entry.ok ? "var(--success)" : isFiltered ? "var(--warning)" : "var(--danger)" }}>
-                    {entry.ok ? "✓" : isFiltered ? "⊘" : "✗"}
-                  </span>
-                  <span className="text-muted">{new Date(entry.at * 1000).toLocaleTimeString()}</span>
-                  <span
-                    style={{
-                      display: "inline-block",
-                      padding: "1px 6px",
-                      borderRadius: "3px",
-                      fontSize: 10,
-                      fontWeight: 600,
-                      letterSpacing: "0.5px",
-                      backgroundColor: isFiltered
-                        ? "var(--warning-tint)"
-                        : isBufferQueue
-                        ? "var(--accent-tint)"
-                        : entry.kind === "live_forward"
-                        ? "var(--success-tint)"
-                        : "var(--surface-hover)",
-                      color: isFiltered
-                        ? "var(--warning)"
-                        : isBufferQueue
-                        ? "var(--accent)"
-                        : entry.kind === "live_forward"
-                        ? "var(--success)"
-                        : "var(--muted)",
-                    }}
-                  >
-                    {isFiltered ? "FILTERED" : isBufferQueue ? "QUEUED" : entry.kind === "live_forward" ? "LIVE" : "BACKFILL"}
-                  </span>
-                  <span>{entry.detail}</span>
-                  {entry.error && !isFiltered && <span className="text-danger">— {entry.error}</span>}
-                </div>
-              );
-            })}
+      )}
+      {task.rate_limited_until != null &&
+        task.rate_limited_until > Date.now() / 1000 && (
+          <div className="alert alert-info" role="status">
+            Waiting for Telegram. Copying can continue after{" "}
+            {dateTime(task.rate_limited_until)}.
           </div>
         )}
 
-        {/* Diagnostic Tool: Send Test Message Copy */}
-        <div className="activity-diagnostic-box">
-          <div className="activity-diagnostic-header">Diagnostic Tool — Send Test Message Copy</div>
-          <div className="row" style={{ marginTop: 8 }}>
-            <input
-              className="input"
-              style={{ maxWidth: 220 }}
-              placeholder="Message ID (optional)"
-              value={testMessageId}
-              onChange={(e) => setTestMessageId(e.target.value)}
-            />
-            <button className="btn btn-secondary btn-sm" disabled={testingCopy} onClick={runTestCopy}>
-              {testingCopy ? "Sending…" : "Send Test Copy"}
-            </button>
+      <section className="card">
+        <div className="card-body detail-grid">
+          <div className="stack">
+            <span className="text-muted">From</span>
+            <strong>{task.source_chat_title || task.source_chat_id}</strong>
           </div>
-          {testCopyResult && (
-            <p className="text-muted" style={{ fontSize: 12.5, marginTop: 8 }}>
-              {testCopyResult}
-            </p>
-          )}
+          <div className="stack">
+            <span className="text-muted">To</span>
+            <strong>{task.dest_chat_title || task.dest_chat_id}</strong>
+          </div>
         </div>
+      </section>
+
+      <div className={hasHistory && hasLive ? "detail-grid" : "stack"}>
+        {hasHistory && (
+          <section className="card">
+            <header className="card-header">
+              <h2 className="card-title">Existing messages</h2>
+              <Badge
+                variant={
+                  task.stop_reason || task.backfill_status === "failed"
+                    ? "failed"
+                    : complete
+                      ? "complete"
+                      : historyRunning
+                        ? "running"
+                        : "paused"
+                }
+                label={task.stop_reason ? "Stopped" : historyLabel}
+              />
+            </header>
+            <div className="card-body stack">
+              <div className="stat-value">
+                {task.processed.toLocaleString()}{" "}
+                <span className="stat-label">copied</span>
+              </div>
+              <progress
+                className="progress"
+                max="100"
+                value={progress}
+                aria-label="Existing message range checked"
+              />
+              <p className="text-muted">
+                {scanned.toLocaleString()} of {total.toLocaleString()} message
+                IDs checked · {progress}%
+              </p>
+              {task.failed > 0 && (
+                <p className="helper">
+                  {task.failed.toLocaleString()} skipped or unavailable. Some
+                  message IDs may be empty, deleted, or unable to be copied.
+                </p>
+              )}
+              {!task.stop_reason && !complete && (
+                <div className="row wrap">
+                  <button
+                    className={`button ${historyRunning ? "button-secondary" : "button-primary"}`}
+                    disabled={busy}
+                    onClick={() =>
+                      void patch(
+                        {
+                          backfillStatus: historyRunning ? "paused" : "running",
+                        },
+                        historyRunning
+                          ? "Existing messages paused"
+                          : "Existing messages resumed",
+                      )
+                    }
+                  >
+                    <Icon name={historyRunning ? "pause" : "play"} />
+                    {historyRunning ? "Pause" : "Resume"}
+                  </button>
+                  {task.backfill_status !== "cancelled" && (
+                    <button
+                      className="button button-ghost"
+                      disabled={busy}
+                      onClick={() => setConfirmation("cancel")}
+                    >
+                      Cancel copying
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+        )}
+        {hasLive && (
+          <section className="card">
+            <header className="card-header">
+              <h2 className="card-title">New messages</h2>
+              <Badge
+                variant={
+                  task.stop_reason
+                    ? "failed"
+                    : task.live_enabled
+                      ? "live"
+                      : "paused"
+                }
+                label={
+                  task.stop_reason
+                    ? "Stopped"
+                    : task.live_enabled
+                      ? "Watching"
+                      : "Paused"
+                }
+              />
+            </header>
+            <div className="card-body stack">
+              <div className="stat-value">
+                {task.live_processed.toLocaleString()}{" "}
+                <span className="stat-label">copied</span>
+              </div>
+              <p className="text-muted">
+                {task.live_enabled
+                  ? "Checks for new messages every minute."
+                  : "New messages are not being copied."}
+              </p>
+              {(task.pending_count ?? 0) > 0 && (
+                <p className="helper">
+                  {task.pending_count!.toLocaleString()} queued
+                  {historyRunning
+                    ? " while existing messages finish copying"
+                    : " for copying"}
+                  .
+                </p>
+              )}
+              {task.live_skipped > 0 && (
+                <p className="helper">
+                  {task.live_skipped.toLocaleString()} skipped by your filters.
+                </p>
+              )}
+              {task.live_failed > 0 && (
+                <p className="helper">
+                  {task.live_failed.toLocaleString()} could not be copied. See
+                  recent activity for details.
+                </p>
+              )}
+              {!task.stop_reason && (
+                <div>
+                  <button
+                    className={`button ${task.live_enabled ? "button-secondary" : "button-primary"}`}
+                    disabled={busy}
+                    onClick={() =>
+                      void patch(
+                        { liveEnabled: !task.live_enabled },
+                        task.live_enabled
+                          ? "New messages paused"
+                          : "New messages resumed",
+                      )
+                    }
+                  >
+                    <Icon name={task.live_enabled ? "pause" : "play"} />
+                    {task.live_enabled ? "Pause" : "Resume"}
+                  </button>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
       </div>
 
-      {/* Edit Task Modal */}
-      {isEditing && (
-        <div className="modal-backdrop" onClick={() => !savingEdit && setIsEditing(false)}>
-          <div className="modal-dialog" onClick={(e) => e.stopPropagation()}>
-            <div className="modal-header">
-              <div className="modal-title">
-                <span>✏️ Edit Task Configuration</span>
+      <section className="card">
+        <header className="card-header">
+          <h2 className="card-title">Recent activity</h2>
+        </header>
+        <div className="card-body">
+          {activityError && (
+            <p className="error" role="status">
+              Activity could not be refreshed. {activityError}
+            </p>
+          )}
+          {!activity?.length ? (
+            <p className="text-muted">No activity recorded yet.</p>
+          ) : (
+            <ul className="activity-list">
+              {activity.slice(0, 8).map((entry) => {
+                const filtered =
+                  entry.error?.startsWith("Filtered:") ||
+                  entry.detail?.includes("skipped:");
+                const queued = entry.detail?.includes("Queued in buffer");
+                return (
+                  <li className="activity-row" key={entry.id}>
+                    <Icon
+                      name={
+                        entry.ok
+                          ? "check-circle"
+                          : filtered
+                            ? "filter"
+                            : "alert"
+                      }
+                    />
+                    <div className="activity-main">
+                      <strong>
+                        {filtered
+                          ? "Skipped by filter"
+                          : queued
+                            ? "Message queued"
+                            : entry.kind === "live_forward"
+                              ? "New message"
+                              : "Existing messages"}
+                      </strong>
+                      <p className="text-muted">
+                        {entry.detail ||
+                          (entry.ok
+                            ? "Copied successfully"
+                            : "Copy could not be completed")}
+                      </p>
+                      {entry.error && (
+                        <p className={filtered ? "helper" : "error"}>
+                          {entry.error}
+                        </p>
+                      )}
+                    </div>
+                    <time
+                      className="activity-time"
+                      dateTime={new Date(entry.at * 1000).toISOString()}
+                    >
+                      {dateTime(entry.at)}
+                    </time>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      </section>
+
+      <details className="card disclosure">
+        <summary>Task details and troubleshooting</summary>
+        <div className="card-body stack">
+          <dl className="detail-list">
+            <div>
+              <dt>Bot</dt>
+              <dd>@{task.bot_username}</dd>
+            </div>
+            <div>
+              <dt>Source chat ID</dt>
+              <dd>{task.source_chat_id}</dd>
+            </div>
+            <div>
+              <dt>Destination chat ID</dt>
+              <dd>{task.dest_chat_id}</dd>
+            </div>
+            <div>
+              <dt>Created</dt>
+              <dd>{dateTime(task.created_at)}</dd>
+            </div>
+            {hasHistory && (
+              <>
+                <div>
+                  <dt>Message range</dt>
+                  <dd>
+                    {task.start_id} to {task.end_id}
+                  </dd>
+                </div>
+                <div>
+                  <dt>Next message ID</dt>
+                  <dd>{task.cursor ?? "Not started"}</dd>
+                </div>
+                <div>
+                  <dt>Messages per batch</dt>
+                  <dd>{task.pacing_batch_size}</dd>
+                </div>
+              </>
+            )}
+            {hasLive && (
+              <div>
+                <dt>New message filters</dt>
+                <dd>
+                  {hasFilters
+                    ? [
+                        task.filter_media_types
+                          ?.split(",")
+                          .map(
+                            (type) => mediaLabels[type.trim()] || type.trim(),
+                          )
+                          .join(", ") || "All types",
+                        task.filter_min_size_bytes != null
+                          ? `Minimum ${formatBytes(task.filter_min_size_bytes)}`
+                          : "",
+                        task.filter_max_size_bytes != null
+                          ? `Maximum ${formatBytes(task.filter_max_size_bytes)}`
+                          : "",
+                      ]
+                        .filter(Boolean)
+                        .join(" · ")
+                    : "All messages"}
+                </dd>
               </div>
+            )}
+            {task.stopped_at && (
+              <div>
+                <dt>Stopped</dt>
+                <dd>{dateTime(task.stopped_at)}</dd>
+              </div>
+            )}
+          </dl>
+          <form
+            className="stack"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void runTestCopy();
+            }}
+          >
+            <h3 className="card-title">Test a copy</h3>
+            <p className="helper">
+              Sends a real copy to the destination. If you leave the ID empty,
+              the bot posts a temporary message to the source to find the latest
+              ID, then tries to delete it. Members may see a notification.
+            </p>
+            <div className="field">
+              <label className="form-label" htmlFor="test-message-id">
+                Message ID <span className="text-muted">(optional)</span>
+              </label>
+              <input
+                id="test-message-id"
+                className="input"
+                inputMode="numeric"
+                value={testMessageId}
+                onChange={(event) => setTestMessageId(event.target.value)}
+                placeholder="For example, 123"
+              />
+            </div>
+            <div>
               <button
-                className="modal-close"
-                disabled={savingEdit}
-                onClick={() => setIsEditing(false)}
-                title="Close"
+                className="button button-secondary"
+                type="submit"
+                disabled={testingCopy || busy}
               >
-                ✕
+                <Icon name="send" />
+                {testingCopy ? "Sending…" : "Send test copy"}
               </button>
             </div>
-
-            <div className="modal-body">
-              {/* Task Label */}
-              <div className="field">
-                <label>Task Label</label>
-                <input
-                  className="input"
-                  value={editLabel}
-                  onChange={(e) => setEditLabel(e.target.value)}
-                  placeholder={displayInfo?.routeText || "Task Name / Label"}
-                />
-              </div>
-
-              {/* Scope Selector */}
-              <div className="field">
-                <label>Copy Scope</label>
-                <select
-                  className="input"
-                  value={editScope}
-                  onChange={(e) => setEditScope(e.target.value as TaskScope)}
-                >
-                  <option value="live">New messages only (Live forward)</option>
-                  <option value="live_and_backfill">✨ Existing + New (Catch-Up Stream)</option>
-                  <option value="backfill_only">Existing only (One-time history backfill)</option>
-                </select>
-              </div>
-
-              {/* Backfill Range Card */}
-              {(editScope === "backfill_only" || editScope === "live_and_backfill") && (
-                <div
-                  style={{
-                    padding: "14px 16px",
-                    background: "var(--surface-raised)",
-                    border: "1px solid var(--border-subtle)",
-                    borderRadius: "var(--radius)",
-                  }}
-                >
-                  <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10, color: "var(--ink)" }}>
-                    📦 Backfill Range Configuration
-                  </div>
-                  <div className="row" style={{ marginBottom: 10 }}>
-                    <div className="field" style={{ margin: 0, flex: 1 }}>
-                      <label style={{ fontSize: 11 }}>Start ID</label>
-                      <input
-                        className="input"
-                        type="number"
-                        min="1"
-                        value={editStartId}
-                        onChange={(e) => setEditStartId(e.target.value)}
-                        placeholder="Start ID"
-                      />
+            {testCopyResult && (
+              <p
+                className={`alert ${testCopyResult.ok ? "alert-success" : "alert-error"}`}
+                role="status"
+              >
+                {testCopyResult.message}
+              </p>
+            )}
+          </form>
+          {(activity?.length ?? 0) > 8 && (
+            <details className="disclosure">
+              <summary>More activity</summary>
+              <ul className="activity-list">
+                {activity!.slice(8).map((entry) => (
+                  <li className="activity-row" key={entry.id}>
+                    <div className="activity-main">
+                      <p>{entry.detail || "Activity recorded"}</p>
+                      {entry.error && <p className="error">{entry.error}</p>}
                     </div>
-                    <div className="field" style={{ margin: 0, flex: 1 }}>
-                      <label style={{ fontSize: 11 }}>End ID</label>
-                      <input
-                        className="input"
-                        type="number"
-                        min="1"
-                        value={editEndId}
-                        onChange={(e) => setEditEndId(e.target.value)}
-                        placeholder="End ID"
-                      />
-                    </div>
-                    <div className="field" style={{ margin: 0, flex: 1 }}>
-                      <label style={{ fontSize: 11 }}>Current Cursor</label>
-                      <input
-                        className="input"
-                        type="number"
-                        min="1"
-                        disabled={resetProgress}
-                        value={resetProgress ? editStartId : editCursor}
-                        onChange={(e) => setEditCursor(e.target.value)}
-                        placeholder="Cursor"
-                      />
-                    </div>
-                  </div>
-
-                  <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer" }}>
-                    <input
-                      type="checkbox"
-                      checked={resetProgress}
-                      onChange={(e) => setResetProgress(e.target.checked)}
-                    />
-                    <span>Reset progress counters (0 copied / 0 failed) and restart from Start ID</span>
-                  </label>
-
-                  <p className="text-muted" style={{ fontSize: 11.5, marginTop: 8 }}>
-                    ⚡ Bulk backfill pace: 60 messages/minute without filters to preserve complete chat history.
-                  </p>
-                </div>
-              )}
-
-              {/* Message Filters Card */}
-              {editScope !== "backfill_only" && (
-                <div
-                  style={{
-                    padding: "14px 16px",
-                    background: "var(--surface-raised)",
-                    border: "1px solid var(--border-subtle)",
-                    borderRadius: "var(--radius)",
-                  }}
-                >
-                  <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
-                    <div style={{ fontWeight: 700, fontSize: 13, display: "flex", alignItems: "center", gap: 6 }}>
-                      <span>🔍 {editScope === "live" ? "Live Message Filters" : "Live Stream Filters (Stage 2)"}</span>
-                    </div>
-                    <label style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 12, cursor: "pointer", fontWeight: 600 }}>
-                      <input
-                        type="checkbox"
-                        checked={enableFilters}
-                        onChange={(e) => setEnableFilters(e.target.checked)}
-                      />
-                      Enable Filters
-                    </label>
-                  </div>
-
-                  {editScope === "live_and_backfill" && (
-                    <div
-                      style={{
-                        padding: "8px 10px",
-                        background: "var(--accent-tint)",
-                        border: "1px solid var(--accent-border)",
-                        borderRadius: "var(--radius-sm)",
-                        fontSize: 11.5,
-                        color: "var(--ink)",
-                        lineHeight: 1.4,
-                        marginBottom: 10,
-                      }}
+                    <time
+                      className="activity-time"
+                      dateTime={new Date(entry.at * 1000).toISOString()}
                     >
-                      • <strong>Backfill</strong> copies full history at 60 msgs/min unfiltered.<br />
-                      • <strong>Live stream</strong> applies the filters below once backfill completes (buffering matching messages until then).
-                    </div>
-                  )}
+                      {dateTime(entry.at)}
+                    </time>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+          <div>
+            <button
+              className="button button-danger button-sm"
+              disabled={busy}
+              onClick={() => setConfirmation("delete")}
+            >
+              <Icon name="trash" />
+              Delete task
+            </button>
+          </div>
+        </div>
+      </details>
 
-                  {enableFilters && (
-                    <div style={{ marginTop: 8, display: "flex", flexDirection: "column", gap: 10 }}>
-                      <div>
-                        <label style={{ fontSize: 11.5, fontWeight: 600, color: "var(--ink)", display: "block", marginBottom: 4 }}>
-                          Allowed Media Types (Leave unchecked for all media)
-                        </label>
-                        <div style={{ display: "flex", gap: 12, flexWrap: "wrap", fontSize: 12 }}>
-                          {[
-                            { id: "document", label: "📄 Documents" },
-                            { id: "video", label: "🎬 Videos" },
-                            { id: "photo", label: "🖼️ Photos" },
-                            { id: "audio", label: "🎵 Audio" },
-                          ].map((mt) => (
-                            <label key={mt.id} style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer" }}>
-                              <input
-                                type="checkbox"
-                                checked={filterMediaTypes.includes(mt.id)}
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    setFilterMediaTypes([...filterMediaTypes, mt.id]);
-                                  } else {
-                                    setFilterMediaTypes(filterMediaTypes.filter((t) => t !== mt.id));
-                                  }
-                                }}
-                              />
-                              {mt.label}
-                            </label>
-                          ))}
-                        </div>
-                      </div>
-
-                      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 10 }}>
-                        <div className="field" style={{ margin: 0 }}>
-                          <label style={{ fontSize: 11 }}>Min File Size (MB)</label>
-                          <input
-                            className="input"
-                            type="number"
-                            min="0"
-                            step="1"
-                            placeholder="e.g. 10 (ignore < 10 MB)"
-                            value={minFileSizeMb}
-                            onChange={(e) => setMinFileSizeMb(e.target.value)}
-                          />
-                        </div>
-                        <div className="field" style={{ margin: 0 }}>
-                          <label style={{ fontSize: 11 }}>Max File Size (MB, optional)</label>
-                          <input
-                            className="input"
-                            type="number"
-                            min="0"
-                            step="1"
-                            placeholder="e.g. 500 (ignore > 500 MB)"
-                            value={maxFileSizeMb}
-                            onChange={(e) => setMaxFileSizeMb(e.target.value)}
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-
-            <div className="modal-footer">
+      {isEditing && (
+        <Modal
+          title="Edit task"
+          busy={busy}
+          onClose={() => setIsEditing(false)}
+          actions={
+            <>
               <button
-                className="btn btn-secondary btn-sm"
-                disabled={savingEdit}
+                className="button button-secondary"
+                disabled={busy}
                 onClick={() => setIsEditing(false)}
               >
                 Cancel
               </button>
               <button
-                className="btn btn-primary btn-sm"
-                disabled={savingEdit}
-                onClick={handleSaveEdit}
+                className="button button-primary"
+                type="submit"
+                form="edit-task-form"
+                disabled={busy}
               >
-                {savingEdit ? "Saving…" : "Save Changes"}
+                {busy ? "Saving…" : "Save changes"}
               </button>
+            </>
+          }
+        >
+          <form
+            id="edit-task-form"
+            className="stack"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void handleSaveEdit();
+            }}
+          >
+            {editError && (
+              <p className="alert alert-error" role="alert">
+                {editError}
+              </p>
+            )}
+            <div className="field">
+              <label className="form-label" htmlFor="edit-task-name">
+                Task name
+              </label>
+              <input
+                id="edit-task-name"
+                className="input"
+                maxLength={200}
+                value={editLabel}
+                onChange={(event) => setEditLabel(event.target.value)}
+                placeholder={displayInfo.routeText}
+              />
             </div>
-          </div>
-        </div>
+            <div className="field">
+              <label className="form-label" htmlFor="edit-task-scope">
+                Messages to copy
+              </label>
+              <select
+                id="edit-task-scope"
+                className="select"
+                value={editScope}
+                onChange={(event) =>
+                  setEditScope(event.target.value as TaskScope)
+                }
+              >
+                <option value="live">New messages</option>
+                <option value="live_and_backfill">
+                  Existing and new messages
+                </option>
+                <option value="backfill_only">Existing messages</option>
+              </select>
+            </div>
+            {editScope !== "live" && (
+              <div className="stack">
+                <div className="form-grid">
+                  <div className="field">
+                    <label className="form-label" htmlFor="edit-first-id">
+                      First message ID
+                    </label>
+                    <input
+                      id="edit-first-id"
+                      className="input"
+                      inputMode="numeric"
+                      value={editStartId}
+                      onChange={(event) => setEditStartId(event.target.value)}
+                      required
+                    />
+                  </div>
+                  <div className="field">
+                    <label className="form-label" htmlFor="edit-last-id">
+                      Last message ID
+                    </label>
+                    <input
+                      id="edit-last-id"
+                      className="input"
+                      inputMode="numeric"
+                      value={editEndId}
+                      onChange={(event) => setEditEndId(event.target.value)}
+                      required
+                    />
+                  </div>
+                </div>
+                <p className="helper">
+                  The message ID is the final number in a Telegram message link.
+                </p>
+                <details className="disclosure">
+                  <summary>Change copy progress</summary>
+                  <div className="stack">
+                    <div className="field">
+                      <label className="form-label" htmlFor="edit-next-id">
+                        Next message ID
+                      </label>
+                      <input
+                        id="edit-next-id"
+                        className="input"
+                        inputMode="numeric"
+                        disabled={resetProgress}
+                        value={resetProgress ? editStartId : editCursor}
+                        onChange={(event) => setEditCursor(event.target.value)}
+                      />
+                    </div>
+                    <label className="checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={resetProgress}
+                        onChange={(event) =>
+                          setResetProgress(event.target.checked)
+                        }
+                      />
+                      Restart from the first message
+                    </label>
+                    <p className="helper">
+                      Restarting clears progress and can copy messages again.
+                      Messages already in the destination stay there.
+                    </p>
+                  </div>
+                </details>
+              </div>
+            )}
+            {editScope !== "backfill_only" && (
+              <details className="disclosure" open={enableFilters || undefined}>
+                <summary>Filter new messages</summary>
+                <div className="stack">
+                  <p className="helper">
+                    These filters apply to new messages only. Existing messages
+                    are copied without filters.
+                  </p>
+                  <label className="checkbox-label">
+                    <input
+                      type="checkbox"
+                      checked={enableFilters}
+                      onChange={(event) =>
+                        setEnableFilters(event.target.checked)
+                      }
+                    />
+                    Use filters
+                  </label>
+                  {enableFilters && (
+                    <>
+                      <fieldset className="checkbox-group">
+                        <legend className="form-label">Message types</legend>
+                        {Object.entries(mediaLabels).map(([value, label]) => (
+                          <label className="checkbox-label" key={value}>
+                            <input
+                              type="checkbox"
+                              checked={filterMediaTypes.includes(value)}
+                              onChange={(event) =>
+                                setFilterMediaTypes((current) =>
+                                  event.target.checked
+                                    ? [...current, value]
+                                    : current.filter((type) => type !== value),
+                                )
+                              }
+                            />
+                            {label}
+                          </label>
+                        ))}
+                      </fieldset>
+                      <p className="helper">
+                        Leave all types unchecked to allow every type.
+                      </p>
+                      <div className="form-grid">
+                        <div className="field">
+                          <label className="form-label" htmlFor="edit-min-size">
+                            Minimum size (MB)
+                          </label>
+                          <input
+                            id="edit-min-size"
+                            className="input"
+                            inputMode="decimal"
+                            value={minFileSizeMb}
+                            onChange={(event) =>
+                              setMinFileSizeMb(event.target.value)
+                            }
+                            placeholder="No minimum"
+                          />
+                        </div>
+                        <div className="field">
+                          <label className="form-label" htmlFor="edit-max-size">
+                            Maximum size (MB)
+                          </label>
+                          <input
+                            id="edit-max-size"
+                            className="input"
+                            inputMode="decimal"
+                            value={maxFileSizeMb}
+                            onChange={(event) =>
+                              setMaxFileSizeMb(event.target.value)
+                            }
+                            placeholder="No maximum"
+                          />
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </div>
+              </details>
+            )}
+          </form>
+        </Modal>
+      )}
+      {confirmation && (
+        <Modal
+          title={
+            confirmation === "delete"
+              ? "Delete this task?"
+              : "Cancel existing messages?"
+          }
+          busy={busy}
+          onClose={() => setConfirmation(null)}
+          actions={
+            <>
+              <button
+                className="button button-secondary"
+                disabled={busy}
+                onClick={() => setConfirmation(null)}
+              >
+                Keep task
+              </button>
+              <button
+                className="button button-danger"
+                disabled={busy}
+                onClick={() =>
+                  confirmation === "delete"
+                    ? void removeTask()
+                    : void patch(
+                        { backfillStatus: "cancelled" },
+                        "Existing messages cancelled",
+                      )
+                }
+              >
+                {busy
+                  ? "Saving…"
+                  : confirmation === "delete"
+                    ? "Delete task"
+                    : "Cancel copying"}
+              </button>
+            </>
+          }
+        >
+          <p className="confirmation-copy">
+            {confirmation === "delete"
+              ? `“${displayInfo.title}” will stop and be removed from your tasks. Messages already copied to Telegram will stay there.`
+              : `Copying existing messages will stop. You can resume it later.${hasLive ? " New-message copying will continue if it is enabled." : ""}`}
+          </p>
+        </Modal>
       )}
     </div>
   );

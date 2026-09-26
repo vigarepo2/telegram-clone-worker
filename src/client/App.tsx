@@ -1,8 +1,9 @@
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { ToastProvider } from "./components/Toast";
 import { LayoutContext } from "./components/LayoutContext";
 import { TasksProvider } from "./lib/useTasksContext";
 import { AuthProvider, useAuth } from "./lib/useAuth";
+import { ThemeProvider } from "./lib/themes";
 import { AuthPage } from "./pages/AuthPage";
 import { AppNav } from "./components/AppNav";
 import { AppFooter } from "./components/AppFooter";
@@ -14,84 +15,118 @@ import { SavedTasksPage } from "./pages/SavedTasksPage";
 import { CompletedTasksPage } from "./pages/CompletedTasksPage";
 import { PausedTasksPage } from "./pages/PausedTasksPage";
 import { EmptyStatePage } from "./pages/EmptyStatePage";
+import { SettingsPage } from "./pages/SettingsPage";
+import { HelpPage } from "./pages/HelpPage";
 import { ErrorBoundary } from "./components/ErrorBoundary";
-
+import { Icon } from "./components/Icon";
 function Page() {
   const route = useHashRoute();
-  if (route.type === "wizard") return <TaskWizardPage fromSavedId={route.fromSavedId} />;
-  if (route.type === "task") return <TaskDetailPage taskId={route.taskId} />;
+  if (route.type === "wizard")
+    return (
+      <TaskWizardPage
+        key={route.fromSavedId ?? "new"}
+        fromSavedId={route.fromSavedId}
+      />
+    );
+  if (route.type === "task")
+    return <TaskDetailPage key={route.taskId} taskId={route.taskId} />;
   if (route.type === "paused") return <PausedTasksPage />;
   if (route.type === "completed") return <CompletedTasksPage />;
   if (route.type === "bots") return <BotsManagePage />;
   if (route.type === "saved-tasks") return <SavedTasksPage />;
+  if (route.type === "settings") return <SettingsPage />;
+  if (route.type === "help") return <HelpPage />;
   return <EmptyStatePage />;
 }
-
 function MainShell() {
-  const { mode, authenticated, loading, skippedSetup } = useAuth();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => {
-    try {
-      return (
-        localStorage.getItem("telegram_sidebar_collapsed") === "true" ||
-        localStorage.getItem("tg_sidebar_collapsed") === "true"
-      );
-    } catch {
-      return false;
-    }
-  });
+  const auth = useAuth();
   const [drawerOpen, setDrawerOpen] = useState(false);
-
-  useEffect(() => {
-    try {
-      localStorage.setItem("telegram_sidebar_collapsed", String(sidebarCollapsed));
-    } catch {
-      // ignore
-    }
-  }, [sidebarCollapsed]);
-
-  const toggleSidebar = () => setSidebarCollapsed((c) => !c);
-
-  if (loading) {
+  const route = useHashRoute();
+  const titles: Record<string, string> = {
+    empty: "Tasks",
+    wizard: "New task",
+    task: "Task details",
+    paused: "Paused & attention",
+    completed: "History",
+    bots: "Bots",
+    "saved-tasks": "Saved setups",
+    settings: "Settings",
+    help: "Help",
+  };
+  if (auth.loading)
     return (
-      <div className="auth-overlay">
-        <div className="auth-card" style={{ textAlign: "center", padding: "40px 24px" }}>
-          <div className="auth-brand-mark" style={{ margin: "0 auto 16px" }}>
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-              <rect x="9" y="9" width="13" height="13" rx="2" ry="2" />
-              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-            </svg>
-          </div>
-          <div style={{ color: "var(--muted)", fontSize: "13px" }}>Loading console...</div>
-        </div>
-      </div>
+      <main className="loading-screen" role="status">
+        <span className="brand-mark">
+          <Icon name="copy" size={26} />
+        </span>
+        <p>Opening your workspace…</p>
+      </main>
     );
-  }
-
-  // If password is required and user is not authenticated: render login
-  if (mode === "enforced" && !authenticated) {
-    return <AuthPage mode="login" />;
-  }
-
-  // If in open mode and user has never chosen to skip setup: render setup
-  if (mode === "open" && !skippedSetup) {
-    return <AuthPage mode="setup" />;
-  }
-
+  if (auth.error && !auth.authenticated)
+    return (
+      <main className="loading-screen">
+        <Icon name="alert" size={32} />
+        <h1>Could not open your workspace</h1>
+        <p className="text-muted">{auth.error}</p>
+        <button
+          className="button button-primary"
+          onClick={() => void auth.refreshStatus()}
+        >
+          Try again
+        </button>
+      </main>
+    );
+  if (!auth.authenticated) return <AuthPage />;
   return (
     <TasksProvider>
       <LayoutContext.Provider
         value={{
-          sidebarCollapsed,
+          sidebarCollapsed: false,
           drawerOpen,
-          toggleSidebar,
           setDrawerOpen,
+          toggleSidebar: () => setDrawerOpen(!drawerOpen),
         }}
       >
         <div className="app-shell">
+          <a
+            href="#main-content"
+            className="skip-link"
+            onClick={(event) => {
+              event.preventDefault();
+              document.getElementById("main-content")?.focus();
+            }}
+          >
+            Skip to content
+          </a>
           <AppNav />
-          <div className="main-layout">
-            <main className="main-panel">
-              <ErrorBoundary>
+          <div className="app-main">
+            <header className="app-header">
+              <div className="row">
+                <button
+                  className="icon-button mobile-menu"
+                  aria-label="Open navigation"
+                  aria-expanded={drawerOpen}
+                  onClick={() => setDrawerOpen(true)}
+                >
+                  <Icon name="menu" />
+                </button>
+                <span className="breadcrumb">
+                  Workspace <Icon name="chevron-right" size={14} />
+                  <strong>{titles[route.type]}</strong>
+                </span>
+              </div>
+              <a className="header-help" href="#help">
+                <Icon name="help" size={18} />
+                <span>Help</span>
+              </a>
+            </header>
+            <main id="main-content" className="app-content" tabIndex={-1}>
+              {auth.error && (
+                <div className="alert alert-error" role="alert">
+                  {auth.error}
+                </div>
+              )}
+              <ErrorBoundary key={route.type}>
                 <Page />
               </ErrorBoundary>
             </main>
@@ -102,13 +137,14 @@ function MainShell() {
     </TasksProvider>
   );
 }
-
 export default function App() {
   return (
-    <ToastProvider>
-      <AuthProvider>
-        <MainShell />
-      </AuthProvider>
-    </ToastProvider>
+    <ThemeProvider>
+      <ToastProvider>
+        <AuthProvider>
+          <MainShell />
+        </AuthProvider>
+      </ToastProvider>
+    </ThemeProvider>
   );
 }

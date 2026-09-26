@@ -19,9 +19,14 @@ export class TelegramApiError extends Error {
 
 function classify(body: TelegramApiErrorBody): ErrorReason {
   const desc = body.description.toLowerCase();
-  if (body.error_code === 429 || desc.includes("too many requests")) return "rate_limited";
+  if (body.error_code === 429 || desc.includes("too many requests"))
+    return "rate_limited";
   if (body.error_code === 401) return "unauthorized";
-  if (body.error_code === 403 || desc.includes("bot was kicked") || desc.includes("bot is not a member")) {
+  if (
+    body.error_code === 403 ||
+    desc.includes("bot was kicked") ||
+    desc.includes("bot is not a member")
+  ) {
     return "bot_not_in_chat";
   }
   if (
@@ -50,7 +55,7 @@ export function errFromTelegram(e: unknown): Result<never> {
   return {
     ok: false,
     errorCode: 0,
-    description: e instanceof Error ? e.message : String(e),
+    description: "The request could not be completed. Try again shortly.",
     reason: "unknown",
   };
 }

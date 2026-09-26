@@ -1,10 +1,14 @@
-export function StatGrid({ items }: { items: { label: string; value: string | number }[] }) {
+export function StatGrid({
+  items,
+}: {
+  items: { label: string; value: string | number }[];
+}) {
   return (
     <div className="stat-grid">
       {items.map((item) => (
-        <div className="stat-item" key={item.label}>
-          <div className="stat-label">{item.label}</div>
-          <div className="stat-value">{item.value}</div>
+        <div className="stat-card" key={item.label}>
+          <span className="stat-label">{item.label}</span>
+          <strong className="stat-value">{item.value}</strong>
         </div>
       ))}
     </div>
