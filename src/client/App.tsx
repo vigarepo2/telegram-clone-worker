@@ -3,7 +3,8 @@ import { ToastProvider } from "./components/Toast";
 import { LayoutContext } from "./components/LayoutContext";
 import { TasksProvider } from "./lib/useTasksContext";
 import { AuthProvider, useAuth } from "./lib/useAuth";
-import { ThemeProvider } from "./lib/themes";
+import { ThemeProvider, usePreferences, useTheme } from "./lib/themes";
+import { THEMES } from "../shared/themeCatalog";
 import { AuthPage } from "./pages/AuthPage";
 import { AppNav } from "./components/AppNav";
 import { AppFooter } from "./components/AppFooter";
@@ -40,6 +41,13 @@ function Page() {
 }
 function MainShell() {
   const auth = useAuth();
+  const { theme } = useTheme();
+  const {
+    loading: preferencesLoading,
+    error: preferencesError,
+    retry: retryPreferences,
+  } = usePreferences();
+  const recipe = THEMES.find((item) => item.id === theme) ?? THEMES[0];
   const [drawerOpen, setDrawerOpen] = useState(false);
   const route = useHashRoute();
   const titles: Record<string, string> = {
@@ -77,6 +85,15 @@ function MainShell() {
       </main>
     );
   if (!auth.authenticated) return <AuthPage />;
+  if (preferencesLoading)
+    return (
+      <main className="loading-screen" role="status">
+        <span className="brand-mark">
+          <Icon name="copy" size={26} />
+        </span>
+        <p>Loading your saved settings…</p>
+      </main>
+    );
   return (
     <TasksProvider>
       <LayoutContext.Provider
@@ -87,7 +104,7 @@ function MainShell() {
           toggleSidebar: () => setDrawerOpen(!drawerOpen),
         }}
       >
-        <div className="app-shell">
+        <div className={`app-shell shell-${recipe.navigation}`}>
           <a
             href="#main-content"
             className="skip-link"
@@ -99,9 +116,9 @@ function MainShell() {
             Skip to content
           </a>
           <AppNav />
-          <div className="app-main">
+          <div className="app-main" inert={drawerOpen ? true : undefined}>
             <header className="app-header">
-              <div className="row">
+              <div className="header-workspace">
                 <button
                   className="icon-button mobile-menu"
                   aria-label="Open navigation"
@@ -110,20 +127,42 @@ function MainShell() {
                 >
                   <Icon name="menu" />
                 </button>
+                {recipe.navigation === "bottom" && (
+                  <a href="#" className="header-brand">
+                    <span className="brand-mark">
+                      <Icon name="copy" size={21} />
+                    </span>
+                    <strong>Telegram Copy</strong>
+                  </a>
+                )}
                 <span className="breadcrumb">
-                  Workspace <Icon name="chevron-right" size={14} />
+                  <span>Workspace</span> <Icon name="chevron-right" size={14} />
                   <strong>{titles[route.type]}</strong>
                 </span>
               </div>
-              <a className="header-help" href="#help">
-                <Icon name="help" size={18} />
-                <span>Help</span>
-              </a>
+              <div className="header-actions">
+                <a className="header-help" href="#help">
+                  <Icon name="help" size={18} />
+                  <span>Help</span>
+                </a>
+              </div>
             </header>
             <main id="main-content" className="app-content" tabIndex={-1}>
               {auth.error && (
                 <div className="alert alert-error" role="alert">
                   {auth.error}
+                </div>
+              )}
+              {preferencesError && route.type !== "settings" && (
+                <div className="alert alert-error" role="alert">
+                  <Icon name="alert" />
+                  <span>{preferencesError}</span>
+                  <button
+                    className="button button-secondary button-sm"
+                    onClick={() => void retryPreferences()}
+                  >
+                    Retry settings
+                  </button>
                 </div>
               )}
               <ErrorBoundary key={route.type}>
@@ -139,12 +178,12 @@ function MainShell() {
 }
 export default function App() {
   return (
-    <ThemeProvider>
-      <ToastProvider>
-        <AuthProvider>
+    <ToastProvider>
+      <AuthProvider>
+        <ThemeProvider>
           <MainShell />
-        </AuthProvider>
-      </ToastProvider>
-    </ThemeProvider>
+        </ThemeProvider>
+      </AuthProvider>
+    </ToastProvider>
   );
 }

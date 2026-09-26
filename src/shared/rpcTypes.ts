@@ -101,6 +101,7 @@ export interface TaskSummary {
   live_failed: number;
   live_skipped: number;
   filter_media_types: string | null;
+  filter_extensions: string | null;
   filter_min_size_bytes: number | null;
   filter_max_size_bytes: number | null;
   pending_count?: number;
@@ -178,6 +179,7 @@ export interface SavedTaskSummary {
   n: number | null;
   pacing_batch_size: number;
   filter_media_types: string | null;
+  filter_extensions: string | null;
   filter_min_size_bytes: number | null;
   filter_max_size_bytes: number | null;
   created_at: number;

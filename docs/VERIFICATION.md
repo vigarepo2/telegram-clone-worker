@@ -4,7 +4,7 @@ Checked on 26 September 2026 with Node.js 24 and Chromium.
 
 ## Automated checks
 
-`npm run check` passes TypeScript checking, 42 regression tests, and the production Worker/browser build. GitHub Actions runs the same command on pushes to `main` and pull requests.
+`npm run check` passes TypeScript checking, 62 regression tests, and the production Worker/browser build. GitHub Actions runs the same command on pushes to `main` and pull requests.
 
 The regression tests cover:
 
@@ -12,6 +12,8 @@ The regression tests cover:
 - Fresh and existing D1 schemas, saved-token privacy, input validation, bot/task association checks, and Telegram error handling.
 - Overlapping scheduled runs, queue/offset atomicity, repeated updates, pause/resume behavior, partial batch failures, and Telegram cooldowns.
 - Public and private Telegram message links, supported chat identifiers, and rejection of unrelated or deceptive URLs.
+- Extension normalization, filename and MIME matching, malformed or unknown metadata, schema upgrades, saved setups, and filtering before delivery.
+- Authenticated workspace preferences, all twenty theme IDs, logout/login persistence, concurrent partial changes, strict input validation, and database failures.
 
 The dependency audit reported no known vulnerabilities after updating the lockfile. An audit reflects the advisory database at the time it runs; it is not a guarantee about future issues.
 
@@ -21,9 +23,11 @@ First-time setup, sign-in, HttpOnly session cookies, and sign-out were exercised
 
 Telegram-dependent screens used synthetic API responses. These checks covered:
 
-- All ten themes across 360px, 768px, and 1440px widths on the dashboard, task details, and settings: 90 combinations with no horizontal overflow or browser errors.
-- Navigation on a phone, theme selection and persistence, chat-link normalization, all four task-creation steps, validation feedback, and the submitted task settings.
+- All twenty themes across 360px, 768px, and 1440px widths on the dashboard, task details, settings, help, and task setup: 300 combinations with no horizontal overflow or browser errors.
+- Navigation on a phone, theme selection, and saved appearance restored after reload, logout/login, and sign-in from a fresh browser. Chat-link normalization, all four task-creation steps, validation feedback, and submitted task settings were also checked.
 - History and live-message pause/resume controls, task editing, bot renaming, and the bot connection form.
+- Display preferences and task defaults, rapid theme changes, failed-save rollback, and recovery when a save succeeds but its response is lost.
+- Creating a task with selected video, photo, and document extensions; editing an existing selection; contextual help dialogs; and FAQ search.
 - Task details at 320px width with text enlarged to 200%, plus phone dialog and sign-in layouts.
 
 The repository screenshots show synthetic example data, not messages from a real Telegram account.

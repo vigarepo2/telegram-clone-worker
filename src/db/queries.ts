@@ -182,6 +182,7 @@ function rowToTask(row: Record<string, unknown>): TaskSummary {
     live_failed: (row.live_failed as number) ?? 0,
     live_skipped: (row.live_skipped as number) ?? 0,
     filter_media_types: (row.filter_media_types as string) ?? null,
+    filter_extensions: (row.filter_extensions as string) ?? null,
     filter_min_size_bytes: (row.filter_min_size_bytes as number) ?? null,
     filter_max_size_bytes: (row.filter_max_size_bytes as number) ?? null,
     pending_count:
@@ -213,6 +214,7 @@ export interface NewTask {
   backfill_status: BackfillStatus;
   pacing_batch_size: number;
   filter_media_types?: string | null;
+  filter_extensions?: string | null;
   filter_min_size_bytes?: number | null;
   filter_max_size_bytes?: number | null;
 }
@@ -229,8 +231,8 @@ export async function insertTask(db: D1Database, t: NewTask): Promise<void> {
       `INSERT INTO tasks (
         ${legacyMethod ? "method," : ""} id, bot_id, label, source_chat_id, source_chat_title, dest_chat_id, dest_chat_title,
         scope, live_enabled, backfill_mode, start_id, end_id, cursor, total, backfill_status, pacing_batch_size,
-        filter_media_types, filter_min_size_bytes, filter_max_size_bytes
-      ) VALUES (${legacyMethod ? "'copy'," : ""}?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        filter_media_types, filter_extensions, filter_min_size_bytes, filter_max_size_bytes
+      ) VALUES (${legacyMethod ? "'copy'," : ""}?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .bind(
       t.id,
@@ -250,6 +252,7 @@ export async function insertTask(db: D1Database, t: NewTask): Promise<void> {
       t.backfill_status,
       t.pacing_batch_size,
       t.filter_media_types ?? null,
+      t.filter_extensions ?? null,
       t.filter_min_size_bytes ?? null,
       t.filter_max_size_bytes ?? null,
     )
@@ -464,6 +467,7 @@ export interface UpdateTaskConfig {
   total?: number | null;
   reset_progress?: boolean;
   filter_media_types?: string | null;
+  filter_extensions?: string | null;
   filter_min_size_bytes?: number | null;
   filter_max_size_bytes?: number | null;
   clear_pending?: boolean;
@@ -521,6 +525,10 @@ export async function updateTaskConfig(
   if (config.filter_media_types !== undefined) {
     sets.push("filter_media_types = ?");
     binds.push(config.filter_media_types);
+  }
+  if (config.filter_extensions !== undefined) {
+    sets.push("filter_extensions = ?");
+    binds.push(config.filter_extensions);
   }
   if (config.filter_min_size_bytes !== undefined) {
     sets.push("filter_min_size_bytes = ?");
@@ -937,6 +945,7 @@ export interface NewSavedTask {
   n: number | null;
   pacing_batch_size: number;
   filter_media_types?: string | null;
+  filter_extensions?: string | null;
   filter_min_size_bytes?: number | null;
   filter_max_size_bytes?: number | null;
 }
@@ -951,8 +960,8 @@ export async function insertSavedTask(
         id, task_id, bot_token, bot_label, bot_username,
         source_chat_id, source_chat_title, dest_chat_id, dest_chat_title,
         scope, backfill_mode, start_id, end_id, n, pacing_batch_size,
-        filter_media_types, filter_min_size_bytes, filter_max_size_bytes
-      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        filter_media_types, filter_extensions, filter_min_size_bytes, filter_max_size_bytes
+      ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
     )
     .bind(
       t.id,
@@ -971,6 +980,7 @@ export async function insertSavedTask(
       t.n,
       t.pacing_batch_size,
       t.filter_media_types ?? null,
+      t.filter_extensions ?? null,
       t.filter_min_size_bytes ?? null,
       t.filter_max_size_bytes ?? null,
     )
@@ -986,7 +996,7 @@ export async function listSavedTasks(
               'Stored securely' AS token_preview,
               source_chat_id, source_chat_title, dest_chat_id, dest_chat_title,
               scope, backfill_mode, start_id, end_id, n, pacing_batch_size,
-              filter_media_types, filter_min_size_bytes, filter_max_size_bytes,
+              filter_media_types, filter_extensions, filter_min_size_bytes, filter_max_size_bytes,
               created_at
        FROM saved_tasks ORDER BY created_at DESC`,
     )
@@ -1008,7 +1018,7 @@ export async function getSavedTask(
               'Stored securely' AS token_preview,
               source_chat_id, source_chat_title, dest_chat_id, dest_chat_title,
               scope, backfill_mode, start_id, end_id, n, pacing_batch_size,
-              filter_media_types, filter_min_size_bytes, filter_max_size_bytes,
+              filter_media_types, filter_extensions, filter_min_size_bytes, filter_max_size_bytes,
               created_at
        FROM saved_tasks WHERE id = ?`,
     )

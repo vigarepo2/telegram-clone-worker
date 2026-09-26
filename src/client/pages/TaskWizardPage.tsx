@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { api } from "../lib/api";
 import { usePolling } from "../lib/usePolling";
+import { usePreferences } from "../lib/themes";
 import { useTasks } from "../lib/useTasksContext";
 import { navigate } from "../lib/router";
 import { useToast } from "../components/Toast";
@@ -9,6 +10,8 @@ import { Icon } from "../components/Icon";
 import { CapabilityChecklist } from "../components/CapabilityChecklist";
 import { ChatTools } from "../components/ChatTools";
 import { Modal } from "../components/Modal";
+import { MediaFilterPicker } from "../components/MediaFilterPicker";
+import { InfoTip, InfoLabel } from "../components/InfoTip";
 import { SCOPE_LABELS } from "./TasksPage";
 import { normalizeChatInput } from "../../shared/chatInput";
 import type {
@@ -32,6 +35,7 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
     error: botsError,
     refetch: refetchBots,
   } = usePolling(() => api.get<BotSummary[]>("/api/bots"), 30000);
+  const { preferences } = usePreferences();
   const tasks = useTasks();
   const toast = useToast();
   const [step, setStep] = useState(0);
@@ -42,14 +46,18 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
   const [dest, setDest] = useState("");
   const [sourceChat, setSourceChat] = useState<ChatLookupResult | null>(null);
   const [destChat, setDestChat] = useState<ChatLookupResult | null>(null);
-  const [scope, setScope] = useState<TaskScope>("live");
+  const [scope, setScope] = useState<TaskScope>(
+    () => preferences.defaultTaskScope,
+  );
   const [mode, setMode] = useState<"range" | "lastN">("range");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [count, setCount] = useState("100");
   const [label, setLabel] = useState("");
-  const [saveSetup, setSaveSetup] = useState(false);
-  const [filters, setFilters] = useState(false);
+  const [saveSetup, setSaveSetup] = useState(() =>
+    fromSavedId ? false : preferences.defaultSaveSetup,
+  );
+  const [extensions, setExtensions] = useState<string[]>([]);
   const [media, setMedia] = useState<string[]>([]);
   const [minSize, setMinSize] = useState("");
   const [maxSize, setMaxSize] = useState("");
@@ -62,8 +70,30 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
   const [testId, setTestId] = useState("");
   const [testResult, setTestResult] = useState("");
   const generation = useRef(0);
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
+  const previousStep = useRef(step);
+  useEffect(() => {
+    if (previousStep.current === step) return;
+    previousStep.current = step;
+    const heading = stepHeadingRef.current;
+    if (!heading) return;
+    heading.focus({ preventScroll: true });
+    const reduceMotion =
+      preferences.reduceMotion ||
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    heading.scrollIntoView({
+      behavior: reduceMotion ? "instant" : "smooth",
+      block: "start",
+    });
+  }, [step, preferences.reduceMotion]);
   const selectedBot = bots?.find((bot) => bot.id === botId);
   const history = scope !== "live";
+  const hasFilters = !!(
+    media.length ||
+    extensions.length ||
+    minSize !== "" ||
+    maxSize !== ""
+  );
   const sourceReady =
     sourceChat &&
     ["creator", "administrator", "member"].includes(sourceChat.botStatus);
@@ -91,14 +121,10 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
         setStart(saved.start_id == null ? "" : String(saved.start_id));
         setEnd(saved.end_id == null ? "" : String(saved.end_id));
         setCount(String(saved.n ?? 100));
-        setFilters(
-          !!(
-            saved.filter_media_types ||
-            saved.filter_min_size_bytes ||
-            saved.filter_max_size_bytes
-          ),
-        );
         setMedia(saved.filter_media_types?.split(",") ?? []);
+        setExtensions(
+          saved.filter_extensions?.split(",").filter(Boolean) ?? [],
+        );
         setMinSize(
           saved.filter_min_size_bytes == null
             ? ""
@@ -231,7 +257,7 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
       !sourceChat?.capabilities.find((c) => c.key === "send_message")?.available
     )
       return "Finding recent messages requires permission to post in the source. Use a message range instead.";
-    if (filters && scope !== "backfill_only") {
+    if (scope !== "backfill_only") {
       if (
         [minSize, maxSize].some(
           (value) =>
@@ -265,16 +291,18 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
       n: history && mode === "lastN" ? Number(count) : undefined,
       saveTemplate: saveSetup,
       allowDuplicate,
-      filterMediaTypes:
-        scope !== "backfill_only" && filters && media.length
-          ? media.join(",")
+      filterExtensions:
+        scope !== "backfill_only" && extensions.length
+          ? extensions.join(",")
           : null,
+      filterMediaTypes:
+        scope !== "backfill_only" && media.length ? media.join(",") : null,
       filterMinSizeBytes:
-        scope !== "backfill_only" && filters && minSize !== ""
+        scope !== "backfill_only" && minSize !== ""
           ? Math.round(Number(minSize) * 1048576)
           : null,
       filterMaxSizeBytes:
-        scope !== "backfill_only" && filters && maxSize !== ""
+        scope !== "backfill_only" && maxSize !== ""
           ? Math.round(Number(maxSize) * 1048576)
           : null,
     });
@@ -354,7 +382,13 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
           <div className="stack">
             <div>
               <span className="eyebrow">STEP 1 OF 4</span>
-              <h2 className="card-title">Choose your bot</h2>
+              <h2
+                className="card-title wizard-step-heading"
+                tabIndex={-1}
+                ref={stepHeadingRef}
+              >
+                Choose your bot
+              </h2>
               <p className="text-muted">
                 Your bot needs access to both chats to copy messages.
               </p>
@@ -373,9 +407,10 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
             {botsLoading && <p className="helper">Loading bots…</p>}
             {!!bots?.length && (
               <div className="field">
-                <label htmlFor="select-bot" className="form-label">
-                  Connected bot
-                </label>
+                <InfoLabel htmlFor="select-bot" label="Connected bot">
+                  Choose a bot already stored in this workspace. It must have
+                  access to the source and destination chats.
+                </InfoLabel>
                 <select
                   className="input"
                   id="select-bot"
@@ -399,9 +434,10 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
             {connectNew || (!botsLoading && !bots?.length) ? (
               <div className="stack">
                 <div className="field">
-                  <label className="form-label" htmlFor="new-token">
-                    Bot token
-                  </label>
+                  <InfoLabel htmlFor="new-token" label="Bot token">
+                    A token is the private key BotFather gives you. Paste it
+                    here to connect your bot. Do not share it with other people.
+                  </InfoLabel>
                   <input
                     id="new-token"
                     type="password"
@@ -484,7 +520,13 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
           <div className="stack">
             <div>
               <span className="eyebrow">STEP 2 OF 4</span>
-              <h2 className="card-title">Where should messages go?</h2>
+              <h2
+                className="card-title wizard-step-heading"
+                tabIndex={-1}
+                ref={stepHeadingRef}
+              >
+                Where should messages go?
+              </h2>
               <p className="text-muted">
                 Add @{selectedBot?.bot_username || "your bot"} to both chats
                 first. For channels, make it an administrator.
@@ -492,9 +534,11 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
             </div>
             <div className="form-grid">
               <div className="field">
-                <label className="form-label" htmlFor="source-chat">
-                  Copy from
-                </label>
+                <InfoLabel htmlFor="source-chat" label="Copy from">
+                  This is the source chat. Paste its public username, numeric
+                  chat ID, or a Telegram chat or message link. Add your bot to
+                  this chat first.
+                </InfoLabel>
                 <input
                   className="input"
                   id="source-chat"
@@ -527,9 +571,11 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
                 )}
               </div>
               <div className="field">
-                <label className="form-label" htmlFor="destination-chat">
-                  Copy to
-                </label>
+                <InfoLabel htmlFor="destination-chat" label="Copy to">
+                  This is where copied messages will appear. It must be
+                  different from the source, and your bot needs permission to
+                  post here.
+                </InfoLabel>
                 <input
                   className="input"
                   id="destination-chat"
@@ -658,10 +704,24 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
           <div className="stack">
             <div>
               <span className="eyebrow">STEP 3 OF 4</span>
-              <h2 className="card-title">Which messages?</h2>
+              <h2
+                className="card-title wizard-step-heading"
+                tabIndex={-1}
+                ref={stepHeadingRef}
+              >
+                Which messages?
+              </h2>
               <p className="text-muted">
                 Choose a one-time copy, ongoing copying, or both.
               </p>
+            </div>
+            <div className="row wrap">
+              <span className="form-label">Messages to copy</span>
+              <InfoTip label="Messages to copy">
+                New messages keeps watching for incoming posts. Existing
+                messages copies a selected history range once. Existing + new
+                copies the range and then continues with incoming posts.
+              </InfoTip>
             </div>
             <fieldset className="choice-grid">
               <legend className="sr-only">Messages to copy</legend>
@@ -712,9 +772,11 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
               <section className="subsection stack">
                 <h3>Choose the history</h3>
                 <div className="field">
-                  <label className="form-label" htmlFor="history-mode">
-                    Selection method
-                  </label>
+                  <InfoLabel htmlFor="history-mode" label="Selection method">
+                    Use a message ID range if you know the first and last
+                    messages. Most recent message IDs posts a temporary message
+                    to find the latest ID, then tries to delete it.
+                  </InfoLabel>
                   <select
                     id="history-mode"
                     className="input"
@@ -731,9 +793,11 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
                   <>
                     <div className="form-grid">
                       <div className="field">
-                        <label className="form-label" htmlFor="start-id">
-                          First message ID
-                        </label>
+                        <InfoLabel htmlFor="start-id" label="First message ID">
+                          The first source message ID to check. The message ID
+                          is the final number in a Telegram message link. This
+                          message is included.
+                        </InfoLabel>
                         <input
                           className="input"
                           id="start-id"
@@ -744,9 +808,10 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
                         />
                       </div>
                       <div className="field">
-                        <label className="form-label" htmlFor="end-id">
-                          Last message ID
-                        </label>
+                        <InfoLabel htmlFor="end-id" label="Last message ID">
+                          The last source message ID to check. It must be at or
+                          after the first ID. This message is included.
+                        </InfoLabel>
                         <input
                           className="input"
                           id="end-id"
@@ -765,9 +830,15 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
                 ) : (
                   <>
                     <div className="field">
-                      <label className="form-label" htmlFor="recent-count">
-                        Number of recent message IDs
-                      </label>
+                      <InfoLabel
+                        htmlFor="recent-count"
+                        label="Number of recent message IDs"
+                      >
+                        Checks this many recent IDs, not a guaranteed number of
+                        copied messages. Deleted or unavailable messages can
+                        leave gaps. Starting sends a temporary source message
+                        and tries to delete it.
+                      </InfoLabel>
                       <input
                         className="input"
                         id="recent-count"
@@ -794,91 +865,152 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
               </section>
             )}
             {scope !== "backfill_only" && (
-              <details className="advanced-section">
-                <summary>
-                  <Icon name="filter" size={17} />
-                  Filter new messages{" "}
-                  <span className="text-muted">Optional</span>
-                </summary>
-                <div className="stack">
-                  <label className="check-row">
-                    <input
-                      type="checkbox"
-                      checked={filters}
-                      onChange={(e) => setFilters(e.target.checked)}
-                    />
-                    Only copy messages matching these filters
-                  </label>
-                  {filters && (
-                    <>
-                      <fieldset className="stack">
-                        <legend className="form-label">Message types</legend>
-                        <div className="row wrap">
-                          {["document", "video", "photo", "audio"].map(
-                            (type) => (
-                              <label className="check-row" key={type}>
-                                <input
-                                  type="checkbox"
-                                  checked={media.includes(type)}
-                                  onChange={(e) =>
-                                    setMedia((values) =>
-                                      e.target.checked
-                                        ? [...values, type]
-                                        : values.filter(
-                                            (value) => value !== type,
-                                          ),
-                                    )
-                                  }
-                                />
-                                {type[0].toUpperCase() + type.slice(1)}
-                              </label>
-                            ),
-                          )}
-                        </div>
-                        <p className="helper">
-                          Leave all unchecked to allow every message type.
-                        </p>
-                      </fieldset>
-                      <div className="form-grid">
-                        <div className="field">
-                          <label className="form-label" htmlFor="min-size">
-                            Minimum file size (MB)
-                          </label>
-                          <input
-                            className="input"
-                            id="min-size"
-                            type="number"
-                            min="0"
-                            step="any"
-                            value={minSize}
-                            onChange={(e) => setMinSize(e.target.value)}
-                            placeholder="No minimum"
-                          />
-                        </div>
-                        <div className="field">
-                          <label className="form-label" htmlFor="max-size">
-                            Maximum file size (MB)
-                          </label>
-                          <input
-                            className="input"
-                            id="max-size"
-                            type="number"
-                            min="0"
-                            step="any"
-                            value={maxSize}
-                            onChange={(e) => setMaxSize(e.target.value)}
-                            placeholder="No maximum"
-                          />
-                        </div>
-                      </div>
-                    </>
-                  )}
-                  <p className="helper">
-                    Filters apply to new messages only. Existing history is
-                    copied without these filters.
-                  </p>
+              <section
+                className="new-message-filters stack"
+                aria-labelledby="new-filters-title"
+              >
+                <div className="row wrap">
+                  <h3 id="new-filters-title">New-message filters</h3>
+                  <InfoTip label="New-message filters">
+                    These choices apply only to messages received after the task
+                    starts. Existing history is copied without filters. Leave
+                    formats, message types, and file-size fields unselected to
+                    copy all available new messages.
+                  </InfoTip>
                 </div>
-              </details>
+                <p className="helper">
+                  Optional. Existing history is copied without these filters.
+                </p>
+                <MediaFilterPicker
+                  value={extensions}
+                  onChange={setExtensions}
+                  disabled={busy}
+                />
+                {media.length > 0 && extensions.length > 0 && (
+                  <div className="alert alert-info">
+                    <Icon name="info" />
+                    <p>
+                      Both filters must match. For example, an .mp4 sent as a
+                      document is excluded if only Videos is checked. Leave
+                      message types unchecked to match by file format alone.
+                    </p>
+                  </div>
+                )}
+                <details className="advanced-section">
+                  <summary>
+                    <Icon name="filter" size={17} />
+                    Message types and file size
+                  </summary>
+                  <div className="stack">
+                    <div className="row wrap">
+                      <h4>Telegram message types</h4>
+                      <InfoTip label="Telegram message types">
+                        Telegram classifies each message by how it was sent,
+                        separately from its file extension. A video uploaded as
+                        a file is a Document, even if its filename ends in .mp4.
+                        Leave these unchecked to allow every message type. If
+                        you also select file formats, both filters must match.
+                      </InfoTip>
+                    </div>
+                    <fieldset className="stack">
+                      <legend className="sr-only">
+                        Allowed Telegram message types
+                      </legend>
+                      <div className="row wrap">
+                        {[
+                          { id: "text", label: "Text" },
+                          { id: "document", label: "Documents" },
+                          { id: "video", label: "Videos" },
+                          { id: "photo", label: "Photos" },
+                          { id: "audio", label: "Audio" },
+                          { id: "voice", label: "Voice messages" },
+                          { id: "animation", label: "Animations" },
+                        ].map((type) => (
+                          <label className="check-row" key={type.id}>
+                            <input
+                              type="checkbox"
+                              checked={media.includes(type.id)}
+                              onChange={(event) =>
+                                setMedia((values) =>
+                                  event.target.checked
+                                    ? [...values, type.id]
+                                    : values.filter(
+                                        (value) => value !== type.id,
+                                      ),
+                                )
+                              }
+                              disabled={busy}
+                            />
+                            {type.label}
+                          </label>
+                        ))}
+                      </div>
+                    </fieldset>
+                    <p className="helper">
+                      Leave all unchecked to allow every message type.
+                    </p>
+                    <div className="form-grid">
+                      <div className="field">
+                        <InfoLabel
+                          htmlFor="min-size"
+                          label="Minimum file size (MB)"
+                        >
+                          Skip files smaller than this amount. Leave empty for
+                          no minimum. Size limits apply only when Telegram
+                          reports a file size. Messages without a reported size
+                          are unaffected by this limit.
+                        </InfoLabel>
+                        <input
+                          className="input"
+                          id="min-size"
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={minSize}
+                          onChange={(event) => setMinSize(event.target.value)}
+                          placeholder="No minimum"
+                          disabled={busy}
+                        />
+                      </div>
+                      <div className="field">
+                        <InfoLabel
+                          htmlFor="max-size"
+                          label="Maximum file size (MB)"
+                        >
+                          Skip files larger than this amount. Leave empty for no
+                          maximum. This checks the size reported by Telegram.
+                        </InfoLabel>
+                        <input
+                          className="input"
+                          id="max-size"
+                          type="number"
+                          min="0"
+                          step="any"
+                          value={maxSize}
+                          onChange={(event) => setMaxSize(event.target.value)}
+                          placeholder="No maximum"
+                          disabled={busy}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </details>
+                {hasFilters && (
+                  <button
+                    type="button"
+                    className="button button-ghost align-start"
+                    onClick={() => {
+                      setExtensions([]);
+                      setMedia([]);
+                      setMinSize("");
+                      setMaxSize("");
+                    }}
+                    disabled={busy}
+                  >
+                    Clear all new-message filters
+                  </button>
+                )}
+              </section>
             )}
             <div className="wizard-actions">
               <button
@@ -909,7 +1041,13 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
           <div className="stack">
             <div>
               <span className="eyebrow">STEP 4 OF 4</span>
-              <h2 className="card-title">Ready to start?</h2>
+              <h2
+                className="card-title wizard-step-heading"
+                tabIndex={-1}
+                ref={stepHeadingRef}
+              >
+                Ready to start?
+              </h2>
               <p className="text-muted">
                 Review your task before copying begins.
               </p>
@@ -949,8 +1087,8 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
                 <dd>
                   {scope === "backfill_only"
                     ? "Not applicable"
-                    : filters
-                      ? `${media.length ? media.join(", ") : "All types"}${minSize ? ` · min ${minSize} MB` : ""}${maxSize ? ` · max ${maxSize} MB` : ""}`
+                    : hasFilters
+                      ? `${media.length ? media.join(", ") : "All message types"}${extensions.length ? ` · ${extensions.length} file formats selected` : " · Any format"}${minSize ? ` · min ${minSize} MB` : ""}${maxSize ? ` · max ${maxSize} MB` : ""}`
                       : "None"}
                 </dd>
               </div>
@@ -962,9 +1100,10 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
               </p>
             )}
             <div className="field">
-              <label className="form-label" htmlFor="task-label">
-                Task name <span className="text-muted">(optional)</span>
-              </label>
+              <InfoLabel htmlFor="task-label" label="Task name (optional)">
+                Give this task a name to recognise it later. Leave it empty to
+                use the source and destination names.
+              </InfoLabel>
               <input
                 className="input"
                 id="task-label"
@@ -975,15 +1114,22 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
                 disabled={busy}
               />
             </div>
-            <label className="check-row">
-              <input
-                type="checkbox"
-                checked={saveSetup}
-                onChange={(e) => setSaveSetup(e.target.checked)}
-                disabled={busy}
-              />
-              Save this setup for next time
-            </label>
+            <div className="row wrap">
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={saveSetup}
+                  onChange={(event) => setSaveSetup(event.target.checked)}
+                  disabled={busy}
+                />
+                Save this setup for next time
+              </label>
+              <InfoTip label="Save this setup">
+                Keep the bot, source, destination, message selection, and
+                filters as a reusable setup. Reusing it still asks you to review
+                before another task starts.
+              </InfoTip>
+            </div>
             <details className="advanced-section">
               <summary>
                 <Icon name="send" size={17} />
@@ -995,9 +1141,11 @@ export function TaskWizardPage({ fromSavedId }: { fromSavedId?: string }) {
                   it again if it falls within your selected range.
                 </p>
                 <div className="field">
-                  <label className="form-label" htmlFor="test-id">
-                    Source message ID
-                  </label>
+                  <InfoLabel htmlFor="test-id" label="Source message ID">
+                    Copy the link to a source message in Telegram and use its
+                    final number. Sending a test creates a real copy in the
+                    destination.
+                  </InfoLabel>
                   <input
                     className="input"
                     id="test-id"

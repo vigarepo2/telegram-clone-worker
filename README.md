@@ -60,27 +60,51 @@ Use a dedicated bot for this app. Telegram allows only one update consumer for a
 
 - A message range copies the IDs between the start and end. Deleted, service, or otherwise uncopyable messages may be skipped by Telegram.
 - The recent-message option finds the latest ID by briefly posting a probe in the source, then deleting it. It needs posting and deletion rights. If cleanup fails, remove the probe manually. The selected number is an ID window, not a guarantee of that many surviving posts.
-- Media-type and size filters apply to **new incoming messages**. Telegram's Bot API does not provide arbitrary historical message metadata, so those filters cannot reliably filter a history range.
+- Message-type, file-format, and size filters apply to **new incoming messages**. Telegram's Bot API does not provide arbitrary historical message metadata, so those filters cannot reliably filter a history range.
 - Content protected against copying cannot be copied through the Bot API.
 - [Telegram normally keeps pending bot updates](https://core.telegram.org/bots/api#getting-updates) for no more than 24 hours. A long outage can leave a gap in live copying; use a known history range to recover it.
 - Sending to Telegram and saving progress in D1 are separate operations. A crash between them can cause a repeat. Exactly-once delivery is not promised.
 
-## Appearance
+### File formats
 
-Open **Settings → Appearance** to choose from ten complete themes. They change navigation, spacing, cards, controls, and typography as well as colors. Your choice is saved on the current device.
+The new-message filter offers **263 extensions in ten groups**, including Photos, Videos, Audio, Documents, and Archives. Search for a format, choose individual extensions, or select a whole group. A video sent as a Telegram document can still match a selected `.mp4` or `.mov` format.
 
-| Theme      | Layout and controls                                |
-| ---------- | -------------------------------------------------- |
-| Cloud      | Spacious blue sidebar and clear cards              |
-| Graphite   | Compact dark navigation and joined statistics      |
-| Paper      | Top navigation, serif headings, and separated rows |
-| Sage       | Floating green sidebar and rounded controls        |
-| Studio     | Top bar, square controls, and offset cards         |
-| Midnight   | Dark blue workspace with right-side navigation     |
-| Terracotta | Warm surfaces and generous spacing                 |
-| Contrast   | Black-and-white navigation with strong outlines    |
-| Terminal   | Monospaced text and compact rows                   |
-| Canvas     | Floating navigation and a desktop card grid        |
+Extension filters use the filename supplied by Telegram, or a specific known format from its media metadata. They do not convert files, inspect file contents, or make files safe to open. If Telegram provides neither a usable filename nor a known format, an active extension filter skips that message. Ordinary Telegram photos often have no original filename; leave formats unrestricted if you want to include all such photos.
+
+Optional Telegram message-type and file-size filters are separate rules. A message must pass every enabled rule. Clearing the extension selection restores **Any format**. Existing-message ranges are not filtered by format.
+
+## Appearance and settings
+
+Open **Settings → Appearance** to choose from twenty themes. Canvas and Contrast remain; the other eighteen replace the earlier designs. Themes change the navigation, task arrangement, settings sections, fields, and controls as well as colors and typography.
+
+**Canvas is the default.** Your selected theme is saved in D1 and restored when you sign in, including from a different browser or phone. Signing out returns the sign-in page to Canvas without changing your saved choice.
+
+| Theme     | Navigation          | Tasks and settings               |
+| --------- | ------------------- | -------------------------------- |
+| Canvas    | Floating navigation | Task cards; section sidebar      |
+| Contrast  | Top navigation      | Task rows; stacked sections      |
+| Editorial | Top navigation      | Reading layout; section columns  |
+| Harbor    | Right navigation    | Task rows; section sidebar       |
+| Ledger    | Left navigation     | Compact list; section rail       |
+| Atelier   | Floating navigation | Task board; section columns      |
+| Orbit     | Slim navigation     | Task cards; section rail         |
+| Deck      | Bottom dock         | Task board; stacked sections     |
+| Blueprint | Left navigation     | Task rows; section columns       |
+| Garden    | Right navigation    | Task cards; section sidebar      |
+| Gallery   | Top navigation      | Task cards; section columns      |
+| Signal    | Slim navigation     | Compact list; section rail       |
+| Mono      | Left navigation     | Reading layout; stacked sections |
+| Notebook  | Left navigation     | Task rows; section sidebar       |
+| Workshop  | Top navigation      | Compact list; section columns    |
+| Focus     | Slim navigation     | Reading layout; section sidebar  |
+| Cinema    | Bottom dock         | Task cards; section rail         |
+| Column    | Right navigation    | Reading layout; stacked sections |
+| Mosaic    | Floating navigation | Task board; section columns      |
+| Metro     | Top navigation      | Task rows; section rail          |
+
+Settings also includes spacing, larger text, reduced motion, task totals, default messages to copy, and saving new setups by default. These choices are saved to the workspace. Task defaults only affect new tasks; existing tasks keep their settings.
+
+Tap an **i** beside an option for a short explanation. The Help page has searchable questions grouped by getting started, choosing messages, files and filters, troubleshooting, and privacy.
 
 All app icons and brand assets live in [`src/assets`](src/assets). Icons are SVG files rather than emoji or a remote icon service. Fonts use the device's installed system fonts.
 

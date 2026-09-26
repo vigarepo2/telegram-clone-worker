@@ -1,7 +1,36 @@
-import { useState } from "react";
+import { useId, useState, type ReactNode } from "react";
 import { api } from "../lib/api";
 import { Icon } from "./Icon";
 import { Modal } from "./Modal";
+import { InfoLabel, InfoTip } from "./InfoTip";
+
+type Action = {
+  action: string;
+  label: string;
+  description: string;
+  success?: string;
+  destructive?: boolean;
+  body?: unknown;
+};
+function ToolOption({
+  label,
+  explanation,
+  children,
+}: {
+  label: string;
+  explanation: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className="chat-tool-option">
+      <div className="info-label">
+        <strong>{label}</strong>
+        <InfoTip label={label}>{explanation}</InfoTip>
+      </div>
+      {children}
+    </div>
+  );
+}
 export function ChatTools({
   botId,
   chatId,
@@ -9,19 +38,16 @@ export function ChatTools({
   botId: string;
   chatId: string;
 }) {
+  const id = useId();
   const [userId, setUserId] = useState("");
   const [link, setLink] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState("");
   const [error, setError] = useState("");
-  const [confirm, setConfirm] = useState<{
-    action: string;
-    label: string;
-    description: string;
-    body?: unknown;
-  } | null>(null);
+  const [confirm, setConfirm] = useState<Action | null>(null);
   async function run() {
-    if (!confirm) return;
+    if (!confirm || busy) return;
+    const action = confirm;
     setBusy(true);
     setError("");
     setResult("");
@@ -30,8 +56,8 @@ export function ChatTools({
       latestMessageId?: number;
       cleanupOk?: boolean;
     }>(
-      `/api/chats/${encodeURIComponent(chatId)}/${confirm.action}?botId=${encodeURIComponent(botId)}`,
-      confirm.body,
+      `/api/chats/${encodeURIComponent(chatId)}/${action.action}?botId=${encodeURIComponent(botId)}`,
+      action.body,
     );
     setBusy(false);
     setConfirm(null);
@@ -43,7 +69,7 @@ export function ChatTools({
       response.data?.invite_link ||
         (response.data?.latestMessageId != null
           ? `Latest message ID: ${response.data.latestMessageId}.${response.data.cleanupOk === false ? " The temporary message could not be deleted. Remove it in Telegram." : ""}`
-          : `${confirm.label} completed.`),
+          : action.success || "Done."),
     );
   }
   const validUser =
@@ -54,152 +80,213 @@ export function ChatTools({
     <details className="advanced-section">
       <summary>
         <Icon name="settings" size={17} />
-        Chat tools
+        More chat tools
       </summary>
       <div className="stack">
         <p className="helper">
-          Optional actions for this source chat. Changes take effect in
-          Telegram.
+          Optional tools for the chat you are copying from. These actions change
+          Telegram directly.
         </p>
-        <div className="row wrap">
-          <button
-            className="button button-secondary button-sm"
-            onClick={() =>
-              setConfirm({
-                action: "invite-link",
-                label: "Create invite link",
-                description: "Create a new invite link for this source chat?",
-              })
-            }
+        <div className="chat-tool-grid">
+          <ToolOption
+            label="Find latest message ID"
+            explanation="A message ID is the number at the end of its Telegram link. This check finds the most recent number by posting a temporary message and trying to delete it. Members may see a notification. You can avoid this by copying a message link yourself."
           >
-            Create invite link
-          </button>
-          <button
-            className="button button-secondary button-sm"
-            onClick={() =>
-              setConfirm({
-                action: "send-test-message",
-                label: "Send test message",
-                description: "Send a visible test message to this source chat?",
-                body: { text: "Test message from Telegram Copy" },
-              })
-            }
-          >
-            Send test message
-          </button>
-          <button
-            className="button button-secondary button-sm"
-            onClick={() =>
-              setConfirm({
-                action: "latest-message-id",
-                label: "Find latest message ID",
-                description:
-                  "This sends a temporary message to the source chat, reads its ID, then tries to delete it. Members may see a notification.",
-              })
-            }
-          >
-            Find latest message ID
-          </button>
-        </div>
-        <div className="field">
-          <label className="form-label" htmlFor="revoke-link">
-            Invite link to revoke
-          </label>
-          <div className="row">
-            <input
-              className="input"
-              id="revoke-link"
-              value={link}
-              onChange={(e) => setLink(e.target.value)}
-              placeholder="https://t.me/+…"
-            />
             <button
-              className="button button-secondary"
-              disabled={!link.trim()}
+              type="button"
+              className="button button-secondary button-sm"
               onClick={() =>
                 setConfirm({
-                  action: "revoke-invite-link",
-                  label: "Revoke link",
+                  action: "latest-message-id",
+                  label: "Find latest message ID",
                   description:
-                    "Revoke this invite link? Anyone using it will no longer be able to join.",
-                  body: { inviteLink: link.trim() },
+                    "Post a temporary message in the source chat to find its latest message number? The bot will try to delete it afterwards. Members may receive a notification.",
                 })
               }
             >
-              Revoke
+              Check latest ID
             </button>
-          </div>
+          </ToolOption>
+          <ToolOption
+            label="Send a test message"
+            explanation="Send a visible message to the source chat to check whether this bot can post there. The message is not removed automatically. This does not test copying to the destination."
+          >
+            <button
+              type="button"
+              className="button button-secondary button-sm"
+              onClick={() =>
+                setConfirm({
+                  action: "send-test-message",
+                  label: "Send test message",
+                  description:
+                    "Send “Test message from Telegram Copy” to the source chat? It will remain there until someone deletes it.",
+                  success: "Test message sent to the source chat.",
+                  body: { text: "Test message from Telegram Copy" },
+                })
+              }
+            >
+              Send test
+            </button>
+          </ToolOption>
         </div>
-        <div className="field">
-          <label className="form-label" htmlFor="member-id">
-            Telegram user ID
-          </label>
-          <input
-            className="input"
-            id="member-id"
-            inputMode="numeric"
-            value={userId}
-            onChange={(e) => setUserId(e.target.value)}
-          />
-          <div className="row wrap">
-            <button
-              className="button button-secondary button-sm"
-              disabled={!validUser}
-              onClick={() =>
-                setConfirm({
-                  action: "ban",
-                  label: "Ban user",
-                  description: `Ban user ${userId} from this chat?`,
-                  body: { userId: Number(userId) },
-                })
-              }
+        <details className="disclosure">
+          <summary>Invite links</summary>
+          <div className="stack">
+            <ToolOption
+              label="Create an invite link"
+              explanation="Create a link people can use to join the source chat. Anyone with the link may be able to join, so share it carefully. Your bot needs permission to invite members."
             >
-              Ban user
-            </button>
-            <button
-              className="button button-secondary button-sm"
-              disabled={!validUser}
-              onClick={() =>
-                setConfirm({
-                  action: "unban",
-                  label: "Unban user",
-                  description: `Allow user ${userId} to rejoin this chat?`,
-                  body: { userId: Number(userId) },
-                })
-              }
+              <button
+                type="button"
+                className="button button-secondary button-sm"
+                onClick={() =>
+                  setConfirm({
+                    action: "invite-link",
+                    label: "Create invite link",
+                    description:
+                      "Create a new link people can use to join the source chat?",
+                  })
+                }
+              >
+                Create link
+              </button>
+            </ToolOption>
+            <div className="field">
+              <InfoLabel htmlFor={`${id}-link`} label="Invite link to cancel">
+                Paste an invite link created by this bot. Cancelling it stops
+                people from joining through that link. Members who already
+                joined stay in the chat.
+              </InfoLabel>
+              <div className="row wrap">
+                <input
+                  className="input"
+                  id={`${id}-link`}
+                  value={link}
+                  onChange={(event) => setLink(event.target.value)}
+                  placeholder="https://t.me/+…"
+                  type="url"
+                />
+                <button
+                  type="button"
+                  className="button button-secondary"
+                  disabled={!link.trim()}
+                  onClick={() =>
+                    setConfirm({
+                      action: "revoke-invite-link",
+                      label: "Cancel invite link",
+                      description:
+                        "Stop this invite link from working? People who already joined will stay in the chat.",
+                      success: "Invite link cancelled.",
+                      destructive: true,
+                      body: { inviteLink: link.trim() },
+                    })
+                  }
+                >
+                  Cancel link
+                </button>
+              </div>
+            </div>
+          </div>
+        </details>
+        <details className="disclosure">
+          <summary>Manage a member</summary>
+          <div className="stack">
+            <div className="field">
+              <InfoLabel htmlFor={`${id}-member`} label="Telegram user ID">
+                Enter the person’s numeric Telegram user ID. This is not their
+                phone number, username, or a message number. Verify the person
+                before making changes.
+              </InfoLabel>
+              <input
+                className="input"
+                id={`${id}-member`}
+                inputMode="numeric"
+                value={userId}
+                onChange={(event) => setUserId(event.target.value.trim())}
+                placeholder="Numeric user ID"
+              />
+            </div>
+            <ToolOption
+              label="Ban a member"
+              explanation="Remove this person and stop them from rejoining the source chat. Your bot must be allowed to restrict members. Check the user ID before confirming."
             >
-              Unban user
-            </button>
-            <button
-              className="button button-secondary button-sm"
-              disabled={!validUser}
-              onClick={() =>
-                setConfirm({
-                  action: "promote",
-                  label: "Make administrator",
-                  description: `Give user ${userId} permission to delete messages, invite users, and restrict members?`,
-                  body: {
-                    userId: Number(userId),
-                    rights: {
-                      can_delete_messages: true,
-                      can_invite_users: true,
-                      can_restrict_members: true,
+              <button
+                type="button"
+                className="button button-secondary button-sm"
+                disabled={!validUser}
+                onClick={() =>
+                  setConfirm({
+                    action: "ban",
+                    label: "Ban member",
+                    description: `Remove user ${userId} and prevent them from rejoining the source chat?`,
+                    success: "Member banned.",
+                    destructive: true,
+                    body: { userId: Number(userId) },
+                  })
+                }
+              >
+                Ban member
+              </button>
+            </ToolOption>
+            <ToolOption
+              label="Allow a member to rejoin"
+              explanation="Remove this person’s ban. They are not added back automatically; they can join again using a valid invitation or public link."
+            >
+              <button
+                type="button"
+                className="button button-secondary button-sm"
+                disabled={!validUser}
+                onClick={() =>
+                  setConfirm({
+                    action: "unban",
+                    label: "Allow member to rejoin",
+                    description: `Remove the ban for user ${userId}? They will be able to join again.`,
+                    success: "Ban removed. This person can join again.",
+                    body: { userId: Number(userId) },
+                  })
+                }
+              >
+                Remove ban
+              </button>
+            </ToolOption>
+            <ToolOption
+              label="Make an administrator"
+              explanation="Give this person permission to delete messages, invite people, and restrict members in the source chat. These are powerful permissions. Your bot must be allowed to appoint administrators."
+            >
+              <button
+                type="button"
+                className="button button-secondary button-sm"
+                disabled={!validUser}
+                onClick={() =>
+                  setConfirm({
+                    action: "promote",
+                    label: "Make administrator",
+                    description: `Give user ${userId} permission to delete messages, invite people, and restrict members in the source chat?`,
+                    success: "Administrator permissions updated.",
+                    destructive: true,
+                    body: {
+                      userId: Number(userId),
+                      rights: {
+                        can_delete_messages: true,
+                        can_invite_users: true,
+                        can_restrict_members: true,
+                      },
                     },
-                  },
-                })
-              }
-            >
-              Make administrator
-            </button>
+                  })
+                }
+              >
+                Make administrator
+              </button>
+            </ToolOption>
           </div>
-        </div>
+        </details>
         {result && (
-          <p className="alert alert-success" role="status">
+          <p className="alert alert-success tool-result" role="status">
             {result}
           </p>
         )}
         {error && (
-          <p className="alert alert-error" role="alert">
+          <p className="alert alert-error tool-result" role="alert">
             {error}
           </p>
         )}
@@ -212,6 +299,7 @@ export function ChatTools({
           actions={
             <>
               <button
+                type="button"
                 className="button button-secondary"
                 disabled={busy}
                 onClick={() => setConfirm(null)}
@@ -219,7 +307,8 @@ export function ChatTools({
                 Cancel
               </button>
               <button
-                className="button button-primary"
+                type="button"
+                className={`button ${confirm.destructive ? "button-danger" : "button-primary"}`}
                 disabled={busy}
                 onClick={() => void run()}
               >

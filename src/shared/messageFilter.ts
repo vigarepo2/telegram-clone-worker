@@ -1,6 +1,11 @@
+import {
+  detectMessageExtension,
+  matchesExtensionFilter,
+} from "./mediaExtensions";
 import type { TelegramMessage } from "../telegram/types";
 
 export interface MessageFilterCriteria {
+  extensions?: string[];
   mediaTypes?: string[]; // e.g. ["document", "video", "photo", "audio", "voice", "animation"]
   minSizeBytes?: number | null;
   maxSizeBytes?: number | null;
@@ -18,6 +23,7 @@ export interface FilterEvaluation {
   detectedType: string;
   detectedSize?: number;
   detectedName?: string;
+  detectedExtension?: string | null;
   reason?: string;
 }
 
@@ -125,6 +131,22 @@ export function evaluateMessageFilter(
 ): FilterEvaluation {
   const meta = extractMessageMetadata(msg);
   const { type, size, name } = meta;
+  const extension = detectMessageExtension(msg);
+  if (
+    criteria.extensions?.length &&
+    !matchesExtensionFilter(extension, criteria.extensions)
+  ) {
+    return {
+      matched: false,
+      detectedType: type,
+      detectedSize: size,
+      detectedName: name,
+      detectedExtension: extension,
+      reason: extension
+        ? `.${extension} files are not selected`
+        : "File format is unknown; it could not be matched to the selected extensions",
+    };
+  }
 
   // 1. Check media type filtering
   if (criteria.mediaTypes && criteria.mediaTypes.length > 0) {
@@ -168,6 +190,7 @@ export function evaluateMessageFilter(
 
   return {
     matched: true,
+    detectedExtension: extension,
     detectedType: type,
     detectedSize: size,
     detectedName: name,

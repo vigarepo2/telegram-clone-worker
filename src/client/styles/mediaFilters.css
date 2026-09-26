@@ -1,0 +1,291 @@
+.media-filter-picker {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 18px;
+  background: var(--surface);
+}
+.format-heading,
+.format-heading-label {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.format-heading {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+.format-heading h3 {
+  font-size: 0.95rem;
+  margin: 0;
+}
+.format-selection-count {
+  border-radius: var(--button-radius);
+  background: var(--surface-raised);
+  color: var(--muted);
+  padding: 4px 9px;
+  font-size: 0.75rem;
+}
+.format-selection-count.has-selection {
+  color: var(--accent);
+  background: var(--accent-tint);
+}
+.format-tabs {
+  display: flex;
+  gap: 5px;
+  padding: 0 0 10px;
+  margin: 0 0 14px;
+  border-bottom: 1px solid var(--border);
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+.format-tab {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 8px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--button-radius);
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+.format-tab.is-active {
+  background: var(--accent-tint);
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+.format-tab-count {
+  border-radius: 10px;
+  min-width: 17px;
+  padding: 1px 4px;
+  font-size: 0.6875rem;
+  background: var(--surface);
+  text-align: center;
+}
+.format-toolbar {
+  display: flex;
+  gap: 9px;
+  margin-bottom: 14px;
+}
+.format-search {
+  position: relative;
+  min-width: 0;
+  flex: 1;
+}
+.format-search > svg {
+  position: absolute;
+  left: 11px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--muted);
+  pointer-events: none;
+}
+.format-search .input {
+  padding-left: 35px;
+  min-width: 0;
+}
+.format-results-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  font-size: 0.8125rem;
+}
+.format-results-heading > span {
+  font-weight: 600;
+}
+.format-results-heading small {
+  color: var(--muted);
+  font-weight: 400;
+}
+.format-bulk-actions {
+  display: flex;
+  gap: 12px;
+}
+.format-bulk-actions .text-link,
+.format-selection-summary .text-link {
+  padding: 3px 0;
+  background: none;
+  border: 0;
+  font: inherit;
+  font-size: 0.75rem;
+  color: var(--accent);
+  cursor: pointer;
+}
+.format-bulk-actions button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.format-panel {
+  min-width: 0;
+  max-height: 275px;
+  overflow-y: auto;
+  padding: 3px 2px;
+  scrollbar-width: thin;
+}
+.format-chip-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(84px, 1fr));
+  gap: 7px;
+}
+.format-chip {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  min-width: 0;
+  min-height: 38px;
+  padding: 8px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--button-radius);
+  background: var(--surface-raised);
+  color: var(--ink-dim);
+  cursor: pointer;
+  font-size: 0.8125rem;
+}
+.format-chip input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  z-index: 1;
+  cursor: pointer;
+}
+.format-chip > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.format-chip > svg {
+  flex-shrink: 0;
+  opacity: 0;
+}
+.format-chip.is-selected {
+  background: var(--accent-tint);
+  border-color: var(--accent);
+  color: var(--accent);
+}
+.format-chip.is-selected > svg {
+  opacity: 1;
+}
+.format-chip:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.format-chip:has(input:disabled) {
+  opacity: 0.5;
+  cursor: default;
+}
+.format-no-results {
+  padding: 20px 0;
+  color: var(--muted);
+  font-size: 0.8125rem;
+}
+.format-selection-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  margin-top: 14px;
+  padding-top: 12px;
+}
+.format-selection-summary p {
+  font-size: 0.75rem;
+  color: var(--muted);
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+.format-selection-summary .text-link {
+  flex-shrink: 0;
+}
+.format-photo-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 12px;
+  color: var(--muted);
+}
+.format-photo-note > svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.format-photo-note p {
+  font-size: 0.75rem;
+  line-height: 1.7;
+}
+:root[data-control-style="square"] .format-chip {
+  border-radius: 0;
+  box-shadow: 2px 2px 0 var(--border-subtle);
+}
+:root[data-control-style="pill"] .format-chip {
+  border-radius: 999px;
+}
+:root[data-control-style="underline"] .format-chip {
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  border-radius: 0;
+}
+:root[data-control-style="outlined"] .format-chip {
+  border-width: 2px;
+  background: transparent;
+}
+:root[data-control-style="outlined"] .format-chip.is-selected {
+  background: var(--accent-tint);
+}
+:root[data-density="compact"] .media-filter-picker {
+  padding: 12px;
+}
+:root[data-density="compact"] .format-chip {
+  min-height: 32px;
+  padding-block: 5px;
+}
+:root[data-text-size="large"] .format-chip,
+:root[data-text-size="large"] .format-tab {
+  font-size: 0.9375rem;
+}
+:root[data-text-size="large"] .format-photo-note p,
+:root[data-text-size="large"] .format-selection-summary p {
+  font-size: 0.875rem;
+}
+@media (max-width: 520px) {
+  .media-filter-picker {
+    padding: 12px;
+  }
+  .format-heading {
+    gap: 8px;
+  }
+  .format-toolbar {
+    flex-wrap: wrap;
+  }
+  .format-search {
+    flex-basis: 100%;
+  }
+  .format-toolbar > button {
+    margin-left: auto;
+  }
+  .format-chip-grid {
+    grid-template-columns: repeat(auto-fill, minmax(74px, 1fr));
+  }
+  .format-selection-summary {
+    flex-direction: column;
+  }
+  .format-panel {
+    max-height: 255px;
+  }
+  .format-chip {
+    min-height: 42px;
+  }
+}

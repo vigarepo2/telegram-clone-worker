@@ -5,6 +5,7 @@ import { useToast } from "../components/Toast";
 import { PageHero } from "../components/PageHero";
 import { Icon } from "../components/Icon";
 import { Modal } from "../components/Modal";
+import { InfoTip } from "../components/InfoTip";
 import { SCOPE_LABELS } from "./TasksPage";
 import type { SavedTaskSummary } from "../../shared/rpcTypes";
 export function SavedTasksPage() {
@@ -32,8 +33,14 @@ export function SavedTasksPage() {
     <div className="content-container">
       <PageHero
         title="Saved setups"
-        subtitle="Reuse your bot, chats, and copy preferences for a new task."
-      />
+        subtitle="Keep useful choices ready for your next task."
+      >
+        <InfoTip label="Saved setups">
+          A saved setup remembers your bot, chats, and message choices. It does
+          not run by itself. Open one, review its choices, and start a new task
+          when needed.
+        </InfoTip>
+      </PageHero>
       <section className="card">
         {error && (
           <div className="alert alert-error" role="alert">
@@ -81,27 +88,40 @@ export function SavedTasksPage() {
                   {item.backfill_mode && (
                     <span>
                       {item.backfill_mode === "lastN"
-                        ? `${item.n} recent message IDs`
+                        ? `Last ${item.n ?? "saved"} message IDs`
                         : `IDs ${item.start_id}–${item.end_id}`}
                     </span>
                   )}
                 </div>
               </div>
               <div className="task-actions">
-                <a
-                  href={`#wizard/from/${item.id}`}
-                  className="button button-secondary button-sm"
-                >
-                  Use setup
-                  <Icon name="arrow-right" size={15} />
-                </a>
-                <button
-                  className="icon-button"
-                  aria-label="Remove saved setup"
-                  onClick={() => setRemove(item)}
-                >
-                  <Icon name="trash" />
-                </button>
+                <div className="option-help">
+                  <a
+                    href={`#wizard/from/${item.id}`}
+                    className="button button-secondary button-sm"
+                  >
+                    Use setup
+                    <Icon name="arrow-right" size={15} />
+                  </a>
+                  <InfoTip label="Use setup">
+                    Fill in a new task with these saved choices. Review the
+                    message range before starting: copying a range again may
+                    create duplicate messages.
+                  </InfoTip>
+                </div>
+                <div className="option-help">
+                  <button
+                    className="icon-button"
+                    aria-label="Remove saved setup"
+                    onClick={() => setRemove(item)}
+                  >
+                    <Icon name="trash" />
+                  </button>
+                  <InfoTip label="Remove saved setup">
+                    Delete this reusable set of choices. Its running tasks and
+                    any messages already copied are not removed.
+                  </InfoTip>
+                </div>
               </div>
             </article>
           ))}

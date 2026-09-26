@@ -60,6 +60,7 @@ async function bootstrap(db: D1Database): Promise<void> {
         live_processed INTEGER NOT NULL DEFAULT 0,
         live_failed INTEGER NOT NULL DEFAULT 0,
         filter_media_types TEXT,
+        filter_extensions TEXT,
         filter_min_size_bytes INTEGER,
         filter_max_size_bytes INTEGER,
         live_skipped INTEGER NOT NULL DEFAULT 0
@@ -91,6 +92,7 @@ async function bootstrap(db: D1Database): Promise<void> {
         pacing_batch_size INTEGER NOT NULL,
         created_at INTEGER NOT NULL DEFAULT (unixepoch()),
         filter_media_types TEXT,
+        filter_extensions TEXT,
         filter_min_size_bytes INTEGER,
         filter_max_size_bytes INTEGER
       )`),
@@ -126,12 +128,14 @@ async function bootstrap(db: D1Database): Promise<void> {
       live_processed: "INTEGER NOT NULL DEFAULT 0",
       live_failed: "INTEGER NOT NULL DEFAULT 0",
       filter_media_types: "TEXT",
+      filter_extensions: "TEXT",
       filter_min_size_bytes: "INTEGER",
       filter_max_size_bytes: "INTEGER",
       live_skipped: "INTEGER NOT NULL DEFAULT 0",
     },
     saved_tasks: {
       filter_media_types: "TEXT",
+      filter_extensions: "TEXT",
       filter_min_size_bytes: "INTEGER",
       filter_max_size_bytes: "INTEGER",
     },

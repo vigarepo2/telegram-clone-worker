@@ -3,6 +3,7 @@ import { api } from "../lib/api";
 import { useToast } from "./Toast";
 import { Icon } from "./Icon";
 import { Modal } from "./Modal";
+import { InfoTip } from "./InfoTip";
 import type { BotInspectionReport } from "../../shared/rpcTypes";
 
 interface BotActivityModalProps {
@@ -65,7 +66,7 @@ export function BotActivityModal({
     if (result.ok) {
       toast.show(
         "success",
-        `Webhook disconnected. ${result.data.pending_update_count.toLocaleString()} queued updates preserved.`,
+        `Other service disconnected. ${result.data.pending_update_count.toLocaleString()} waiting updates kept.`,
       );
       setConfirmDisconnect(false);
       onWebhookDisconnected?.();
@@ -84,14 +85,20 @@ export function BotActivityModal({
       busy={disconnecting}
       actions={
         <>
-          <button
-            className="button button-secondary"
-            disabled={loading || disconnecting}
-            onClick={() => void loadReport()}
-          >
-            <Icon name="refresh" />
-            {loading ? "Checking…" : "Refresh"}
-          </button>
+          <div className="option-help">
+            <button
+              className="button button-secondary"
+              disabled={loading || disconnecting}
+              onClick={() => void loadReport()}
+            >
+              <Icon name="refresh" />
+              {loading ? "Checking…" : "Refresh"}
+            </button>
+            <InfoTip label="Refresh bot status">
+              Ask Telegram for the latest connection status. This does not send
+              a message or read the bot’s waiting messages.
+            </InfoTip>
+          </div>
           <button
             className="button button-primary"
             disabled={disconnecting}
@@ -137,10 +144,10 @@ export function BotActivityModal({
                 </strong>
                 <p>
                   {report.webhook.is_active
-                    ? "This bot sends updates to an existing webhook. Disconnect it below if you want this app to receive new messages."
+                    ? "This bot sends new-message notifications to another service. Disconnect that service below only if you want to stop it receiving those notifications."
                     : report.polling_session.conflict_detected
                       ? "Stop the other app before using this bot here. Only one app can receive this bot’s updates at a time."
-                      : "No active webhook was found. This app can check for new messages."}
+                      : "No direct connection to another service was found. Another app may still be checking this bot; this status check cannot detect every competing app."}
                 </p>
               </div>
             </div>
@@ -153,29 +160,40 @@ export function BotActivityModal({
               )}
             <div className="stat-grid">
               <div className="stat-card">
-                <span className="stat-label">Active tasks</span>
+                <div className="info-label">
+                  <span className="stat-label">Active tasks</span>
+                  <InfoTip label="Active bot tasks">
+                    Tasks using this bot that are watching for new messages or
+                    have existing messages running or paused. Open an individual
+                    task for its progress.
+                  </InfoTip>
+                </div>
                 <strong className="stat-value">
                   {report.clone_worker_tasks.active_count.toLocaleString()}
                 </strong>
-                <span className="helper">
-                  {report.clone_worker_tasks.tasks.length.toLocaleString()}{" "}
-                  total
-                </span>
               </div>
               <div className="stat-card">
-                <span className="stat-label">Telegram limit</span>
+                <div className="info-label">
+                  <span className="stat-label">Telegram waiting period</span>
+                  <InfoTip label="Telegram waiting period">
+                    Telegram sometimes asks the bot to wait before sending more
+                    messages. The task keeps its place and retries after the
+                    wait. Ready means this workspace has no recorded wait right
+                    now.
+                  </InfoTip>
+                </div>
                 <strong className="stat-value">
                   {report.rate_limits.is_cooling_down ? "Waiting" : "Ready"}
                 </strong>
                 <span className="helper">
                   {report.rate_limits.is_cooling_down
                     ? `Try again in ${report.rate_limits.cooldown_seconds_remaining} seconds`
-                    : "No waiting period"}
+                    : "No wait recorded here"}
                 </span>
               </div>
             </div>
             <section className="stack">
-              <h3 className="card-title">Recent updates</h3>
+              <h3 className="card-title">Copy activity</h3>
               {report.recent_activities.length ? (
                 <ul className="activity-list">
                   {report.recent_activities.map((activity) => (
@@ -214,11 +232,25 @@ export function BotActivityModal({
                   ))}
                 </ul>
               ) : (
-                <p className="text-muted">
-                  {report.webhook.is_active
-                    ? "Updates are being delivered to the connected service."
-                    : "No updates waiting in Telegram."}
-                </p>
+                <div className="stack">
+                  <p className="text-muted">
+                    This status check does not read your waiting messages. Open
+                    a task to see what it has copied.
+                  </p>
+                  {report.clone_worker_tasks.tasks.length > 0 ? (
+                    <ul className="activity-list">
+                      {report.clone_worker_tasks.tasks.map((task) => (
+                        <li key={task.id}>
+                          <a href={`#task/${task.id}`} onClick={onClose}>
+                            {task.label}
+                          </a>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="helper">No ongoing tasks use this bot yet.</p>
+                  )}
+                </div>
               )}
             </section>
             <details className="disclosure">
@@ -230,7 +262,16 @@ export function BotActivityModal({
                     <dd>{report.bot_id}</dd>
                   </div>
                   <div>
-                    <dt>Webhook</dt>
+                    <dt>
+                      <span className="option-help">
+                        Other service connection
+                        <InfoTip label="Other service connection">
+                          Telegram calls this a webhook. When active, Telegram
+                          sends new-message notifications directly to another
+                          service instead of making them available to this app.
+                        </InfoTip>
+                      </span>
+                    </dt>
                     <dd>{report.webhook.is_active ? "Active" : "None"}</dd>
                   </div>
                   {report.webhook.url && (
@@ -240,13 +281,31 @@ export function BotActivityModal({
                     </div>
                   )}
                   <div>
-                    <dt>Queued updates</dt>
+                    <dt>
+                      <span className="option-help">
+                        Waiting updates
+                        <InfoTip label="Waiting updates">
+                          Notifications Telegram is waiting to deliver to the
+                          connected service. This is not the number of messages
+                          waiting in your copy tasks.
+                        </InfoTip>
+                      </span>
+                    </dt>
                     <dd>
                       {report.webhook.pending_update_count.toLocaleString()}
                     </dd>
                   </div>
                   <div>
-                    <dt>Rate limits in 24 hours</dt>
+                    <dt>
+                      <span className="option-help">
+                        Recorded waits in 24 hours
+                        <InfoTip label="Recorded Telegram waits">
+                          Waiting periods found in this workspace’s recent
+                          activity records. This is not a complete history of
+                          every limit Telegram has applied to the bot.
+                        </InfoTip>
+                      </span>
+                    </dt>
                     <dd>
                       {report.rate_limits.events_last_24h.toLocaleString()}
                     </dd>
@@ -300,20 +359,27 @@ export function BotActivityModal({
                       >
                         {disconnecting
                           ? "Disconnecting…"
-                          : "Disconnect webhook"}
+                          : "Disconnect other service"}
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <div>
+                  <div className="option-help">
                     <button
                       className="button button-secondary"
                       disabled={loading || disconnecting}
                       onClick={() => setConfirmDisconnect(true)}
                     >
                       <Icon name="link" />
-                      Disconnect webhook
+                      Disconnect other service
                     </button>
+                    <InfoTip label="Disconnect other service">
+                      Stop Telegram from delivering this bot’s new-message
+                      notifications to the other connected service. Its bot
+                      features may stop working. Notifications still waiting at
+                      Telegram are kept, but you may need to resume stopped
+                      tasks here.
+                    </InfoTip>
                   </div>
                 )}
               </div>

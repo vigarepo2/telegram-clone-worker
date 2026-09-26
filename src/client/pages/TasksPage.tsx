@@ -9,6 +9,8 @@ import { usePolling } from "../lib/usePolling";
 import { useToast } from "../components/Toast";
 import { PageHero } from "../components/PageHero";
 import { Icon } from "../components/Icon";
+import { InfoTip } from "../components/InfoTip";
+import { usePreferences, THEMES } from "../lib/themes";
 import { Badge } from "../components/Badge";
 import { ProgressBar } from "../components/ProgressBar";
 import type { BotSummary, TaskSummary } from "../../shared/rpcTypes";
@@ -23,6 +25,8 @@ export function TasksPage({
   view?: "active" | "paused" | "history";
 }) {
   const context = useTasks();
+  const { preferences, theme } = usePreferences();
+  const recipe = THEMES.find((option) => option.id === theme)!;
   const toast = useToast();
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
@@ -73,8 +77,151 @@ export function TasksPage({
       : view === "paused"
         ? "Paused & attention"
         : "Task history";
+  function renderTask(task: TaskSummary, index: number) {
+    const display = getTaskDisplayInfo(task);
+    const attention = !!task.stop_reason || task.backfill_status === "failed";
+    return (
+      <article className="task-row" key={task.id}>
+        {recipe.taskLayout === "editorial" && (
+          <span className="task-number" aria-hidden="true">
+            {String(index + 1).padStart(2, "0")}
+          </span>
+        )}
+        <div className="task-icon">
+          <Icon name={task.scope === "backfill_only" ? "history" : "copy"} />
+        </div>
+        <div className="task-main">
+          <div className="task-title">
+            <a href={`#task/${task.id}`}>{display.title}</a>
+            <Badge
+              variant={
+                attention
+                  ? "failed"
+                  : view === "paused"
+                    ? "paused"
+                    : view === "history"
+                      ? task.backfill_status === "complete"
+                        ? "complete"
+                        : "idle"
+                      : task.backfill_status === "running" ||
+                          task.backfill_status === "pending"
+                        ? "running"
+                        : task.live_enabled
+                          ? "live"
+                          : "paused"
+              }
+            />
+          </div>
+          {display.isCustomLabel && (
+            <p className="task-route">{display.routeText}</p>
+          )}
+          <div className="task-meta">
+            <span>{SCOPE_LABELS[task.scope]}</span>
+            <span>
+              {(
+                (task.processed ?? 0) + (task.live_processed ?? 0)
+              ).toLocaleString()}{" "}
+              copied
+            </span>
+            <span>{new Date(task.created_at * 1000).toLocaleDateString()}</span>
+          </div>
+          {task.total != null &&
+            task.total > 0 &&
+            task.backfill_status !== "complete" && (
+              <ProgressBar
+                processed={task.processed}
+                failed={task.failed}
+                total={task.total}
+              />
+            )}
+        </div>
+        <div className="task-actions">
+          {view !== "history" && !attention && (
+            <button
+              className="button button-secondary button-sm"
+              disabled={busy === task.id}
+              onClick={() => void toggle(task)}
+            >
+              <Icon name={view === "paused" ? "play" : "pause"} size={15} />
+              {busy === task.id
+                ? "Updating…"
+                : view === "paused"
+                  ? "Resume"
+                  : "Pause"}
+            </button>
+          )}
+          {view !== "history" && !attention && (
+            <InfoTip label={isTaskActive(task) ? "Pause task" : "Resume task"}>
+              {isTaskActive(task)
+                ? "Stops this task from copying more messages. Anything already copied stays in Telegram. You can resume later."
+                : "Continues copying from the saved position. Messages already waiting in this task stay in its queue."}
+            </InfoTip>
+          )}
+          <a
+            className="icon-button"
+            href={`#task/${task.id}`}
+            aria-label={`Open ${display.title}`}
+          >
+            <Icon name="arrow-right" />
+          </a>
+        </div>
+      </article>
+    );
+  }
+  const boardGroups =
+    view === "active"
+      ? [
+          {
+            title: "Copying history",
+            description: "Working through existing messages",
+            items: displayed.filter((task) =>
+              ["running", "pending"].includes(task.backfill_status),
+            ),
+          },
+          {
+            title: "Watching for new messages",
+            description: "Copying new posts as they arrive",
+            items: displayed.filter(
+              (task) => !["running", "pending"].includes(task.backfill_status),
+            ),
+          },
+        ]
+      : view === "paused"
+        ? [
+            {
+              title: "Paused",
+              description: "Ready when you want to continue",
+              items: displayed.filter(
+                (task) =>
+                  !task.stop_reason && task.backfill_status !== "failed",
+              ),
+            },
+            {
+              title: "Needs your attention",
+              description: "Open a task to see what needs fixing",
+              items: displayed.filter(
+                (task) => task.stop_reason || task.backfill_status === "failed",
+              ),
+            },
+          ]
+        : [
+            {
+              title: "Finished",
+              description: "Selected message ranges are complete",
+              items: displayed.filter(
+                (task) => task.backfill_status === "complete",
+              ),
+            },
+            {
+              title: "Stopped",
+              description: "Tasks you cancelled or stopped",
+              items: displayed.filter(
+                (task) => task.backfill_status !== "complete",
+              ),
+            },
+          ];
   return (
-    <div className="content-container">
+    <div className="content-container tasks-page">
       <PageHero
         title={title}
         subtitle={
@@ -89,8 +236,12 @@ export function TasksPage({
           <Icon name="plus" />
           New task
         </a>
+        <InfoTip label="New task">
+          Choose a Telegram bot, the chat to copy from, and the chat to copy to.
+          You can check everything before copying starts.
+        </InfoTip>
       </PageHero>
-      {view === "active" && (
+      {view === "active" && preferences.showTaskStats && (
         <div className="stat-grid">
           <div className="stat-card">
             <div className="stat-label">
@@ -149,15 +300,21 @@ export function TasksPage({
             </p>
           </div>
           {tasks.length > 0 && (
-            <div className="search-field">
-              <Icon name="search" size={18} />
-              <input
-                className="input"
-                aria-label="Search tasks"
-                placeholder="Search tasks"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
+            <div className="task-search-tools">
+              <div className="search-field">
+                <Icon name="search" size={18} />
+                <input
+                  className="input"
+                  aria-label="Search tasks"
+                  placeholder="Search tasks"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+              </div>
+              <InfoTip label="Search tasks">
+                Find a task by its name or either chat name. This only filters
+                the list on this page; it does not change your tasks.
+              </InfoTip>
             </div>
           )}
         </div>
@@ -223,95 +380,30 @@ export function TasksPage({
             </button>
           </div>
         )}
-        <div className="task-list">
-          {displayed.map((task) => {
-            const display = getTaskDisplayInfo(task);
-            const attention =
-              !!task.stop_reason || task.backfill_status === "failed";
-            return (
-              <article className="task-row" key={task.id}>
-                <div className="task-icon">
-                  <Icon
-                    name={task.scope === "backfill_only" ? "history" : "copy"}
-                  />
-                </div>
-                <div className="task-main">
-                  <div className="task-title">
-                    <a href={`#task/${task.id}`}>{display.title}</a>
-                    <Badge
-                      variant={
-                        attention
-                          ? "failed"
-                          : view === "paused"
-                            ? "paused"
-                            : view === "history"
-                              ? task.backfill_status === "complete"
-                                ? "complete"
-                                : "idle"
-                              : task.backfill_status === "running" ||
-                                  task.backfill_status === "pending"
-                                ? "running"
-                                : task.live_enabled
-                                  ? "live"
-                                  : "paused"
-                      }
-                    />
-                  </div>
-                  {display.isCustomLabel && (
-                    <p className="task-route">{display.routeText}</p>
-                  )}
-                  <div className="task-meta">
-                    <span>{SCOPE_LABELS[task.scope]}</span>
-                    <span>
-                      {(
-                        (task.processed ?? 0) + (task.live_processed ?? 0)
-                      ).toLocaleString()}{" "}
-                      copied
-                    </span>
-                    <span>
-                      {new Date(task.created_at * 1000).toLocaleDateString()}
-                    </span>
-                  </div>
-                  {task.total != null &&
-                    task.total > 0 &&
-                    task.backfill_status !== "complete" && (
-                      <ProgressBar
-                        processed={task.processed}
-                        failed={task.failed}
-                        total={task.total}
-                      />
-                    )}
-                </div>
-                <div className="task-actions">
-                  {view !== "history" && !attention && (
-                    <button
-                      className="button button-secondary button-sm"
-                      disabled={busy === task.id}
-                      onClick={() => void toggle(task)}
-                    >
-                      <Icon
-                        name={view === "paused" ? "play" : "pause"}
-                        size={15}
-                      />
-                      {busy === task.id
-                        ? "Updating…"
-                        : view === "paused"
-                          ? "Resume"
-                          : "Pause"}
-                    </button>
-                  )}
-                  <a
-                    className="icon-button"
-                    href={`#task/${task.id}`}
-                    aria-label={`Open ${display.title}`}
-                  >
-                    <Icon name="arrow-right" />
-                  </a>
-                </div>
-              </article>
-            );
-          })}
-        </div>
+        {recipe.taskLayout === "board" && displayed.length > 0 ? (
+          <div className="task-board">
+            {boardGroups.map((group) => (
+              <section
+                className="task-board-column"
+                key={group.title}
+                aria-label={group.title}
+              >
+                <header className="task-board-heading">
+                  <h3>
+                    {group.title} <span>{group.items.length}</span>
+                  </h3>
+                  <p>{group.description}</p>
+                </header>
+                <div className="task-list">{group.items.map(renderTask)}</div>
+                {group.items.length === 0 && (
+                  <p className="board-empty">No tasks here.</p>
+                )}
+              </section>
+            ))}
+          </div>
+        ) : (
+          <div className="task-list">{displayed.map(renderTask)}</div>
+        )}
       </section>
       {view === "active" && !context.loading && context.tasks.length === 0 && (
         <div className="quick-guide">

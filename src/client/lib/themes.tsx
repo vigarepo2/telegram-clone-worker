@@ -1,146 +1,245 @@
 import {
   createContext,
+  useCallback,
   useContext,
-  useEffect,
   useLayoutEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
+import { api } from "./api";
+import { useAuth } from "./useAuth";
+import {
+  DEFAULT_PREFERENCES,
+  type WorkspacePreferences,
+} from "../../shared/preferences";
+import { THEMES, DEFAULT_THEME, type ThemeId } from "../../shared/themeCatalog";
 
-export const THEMES = [
-  {
-    id: "cloud",
-    name: "Cloud",
-    description: "Clear blue, spacious sidebar",
-    layout: "sidebar",
-    colors: ["#f6f8fc", "#ffffff", "#2767dd", "#dce4f1"],
-  },
-  {
-    id: "graphite",
-    name: "Graphite",
-    description: "Dark workspace, compact navigation",
-    layout: "rail",
-    colors: ["#15171c", "#20232b", "#a7bfff", "#3c414e"],
-  },
-  {
-    id: "paper",
-    name: "Paper",
-    description: "Editorial type, navigation above",
-    layout: "top",
-    colors: ["#f6f4ef", "#fffefa", "#3c5141", "#d7d3c8"],
-  },
-  {
-    id: "sage",
-    name: "Sage",
-    description: "Floating sidebar, soft green panels",
-    layout: "floating",
-    colors: ["#edf3ef", "#ffffff", "#27654c", "#cdded3"],
-  },
-  {
-    id: "studio",
-    name: "Studio",
-    description: "Top bar, bold type, square controls",
-    layout: "top",
-    colors: ["#f3f2f9", "#ffffff", "#6a42c2", "#ddd7ed"],
-  },
-  {
-    id: "midnight",
-    name: "Midnight",
-    description: "Deep blue, navigation on the right",
-    layout: "right",
-    colors: ["#0e1728", "#172439", "#79cdf0", "#33465f"],
-  },
-  {
-    id: "terracotta",
-    name: "Terracotta",
-    description: "Warm tones, generous card spacing",
-    layout: "sidebar",
-    colors: ["#f8f2ed", "#fffcf9", "#a4442d", "#e6d7cd"],
-  },
-  {
-    id: "contrast",
-    name: "Contrast",
-    description: "Black and white, clear outlines",
-    layout: "top",
-    colors: ["#ffffff", "#ffffff", "#171717", "#171717"],
-  },
-  {
-    id: "terminal",
-    name: "Terminal",
-    description: "Monospaced text, dense workspace",
-    layout: "rail",
-    colors: ["#111a18", "#192622", "#8cd8b4", "#365449"],
-  },
-  {
-    id: "canvas",
-    name: "Canvas",
-    description: "Rounded controls, quiet neutral cards",
-    layout: "floating",
-    colors: ["#f1f0ed", "#ffffff", "#474847", "#deded9"],
-  },
-] as const;
+export { THEMES, DEFAULT_THEME, type ThemeId } from "../../shared/themeCatalog";
 
-export type ThemeId = (typeof THEMES)[number]["id"];
-const STORAGE_KEY = "telegram-clone-worker:theme";
-const DEFAULT_THEME: ThemeId = "cloud";
-
-function isTheme(value: unknown): value is ThemeId {
-  return (
-    typeof value === "string" && THEMES.some((theme) => theme.id === value)
-  );
-}
-
-function readTheme(): ThemeId {
-  try {
-    const value = localStorage.getItem(STORAGE_KEY);
-    return isTheme(value) ? value : DEFAULT_THEME;
-  } catch {
-    return DEFAULT_THEME;
-  }
-}
-
-const ThemeContext = createContext<{
+type PreferencePatch = Partial<WorkspacePreferences>;
+interface PreferencesContextValue {
+  preferences: WorkspacePreferences;
   theme: ThemeId;
-  setTheme: (theme: ThemeId) => void;
-} | null>(null);
+  loading: boolean;
+  saving: boolean;
+  isSaving: boolean;
+  error: string | null;
+  updatePreferences: (patch: PreferencePatch) => Promise<boolean>;
+  setTheme: (theme: ThemeId) => Promise<boolean>;
+  retry: () => Promise<void>;
+}
+const PreferencesContext = createContext<PreferencesContextValue | null>(null);
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
-  const [theme, setTheme] = useState<ThemeId>(readTheme);
+  const { authenticated } = useAuth();
+  const [preferences, setPreferences] =
+    useState<WorkspacePreferences>(DEFAULT_PREFERENCES);
+  const [loading, setLoading] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const [pending, setPending] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+  const generation = useRef(0);
+  const revision = useRef(0);
+  const savedPreferences = useRef(DEFAULT_PREFERENCES);
+  const writeQueue = useRef<Promise<void>>(Promise.resolve());
+  const activeSession = useRef(false);
+  const hasSavedSnapshot = useRef(false);
+  const readSequence = useRef(0);
+  const pendingWrites = useRef(0);
 
-  useLayoutEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    document.documentElement.style.colorScheme = [
-      "graphite",
-      "midnight",
-      "terminal",
-    ].includes(theme)
-      ? "dark"
-      : "light";
-    try {
-      localStorage.setItem(STORAGE_KEY, theme);
-    } catch {
-      // The current theme still works when browser storage is unavailable.
+  const readPreferences = useCallback(async (session: number) => {
+    const sequence = ++readSequence.current;
+    const readingRevision = revision.current;
+    setLoading(true);
+    const result = await api.get<WorkspacePreferences>("/api/preferences");
+    if (session !== generation.current || !activeSession.current) return;
+    if (sequence !== readSequence.current) return;
+    if (readingRevision !== revision.current) {
+      setLoading(false);
+      return;
     }
-  }, [theme]);
-
-  useEffect(() => {
-    const onStorage = (event: StorageEvent) => {
-      if (event.key === STORAGE_KEY)
-        setTheme(isTheme(event.newValue) ? event.newValue : DEFAULT_THEME);
-    };
-    window.addEventListener("storage", onStorage);
-    return () => window.removeEventListener("storage", onStorage);
+    if (result.ok) {
+      savedPreferences.current = result.data;
+      hasSavedSnapshot.current = true;
+      setPreferences(result.data);
+      setError(null);
+    } else {
+      setError(result.description);
+    }
+    // A failed first read exposes the retry control, but cannot enable writes
+    // until there is an actual saved snapshot to preserve.
+    setLoaded(true);
+    setLoading(false);
   }, []);
 
-  const value = useMemo(() => ({ theme, setTheme }), [theme]);
+  useLayoutEffect(() => {
+    const session = ++generation.current;
+    activeSession.current = authenticated;
+    hasSavedSnapshot.current = false;
+    revision.current = 0;
+    readSequence.current++;
+    pendingWrites.current = 0;
+    writeQueue.current = Promise.resolve();
+    savedPreferences.current = DEFAULT_PREFERENCES;
+    setPreferences(DEFAULT_PREFERENCES);
+    setLoaded(false);
+    setPending(0);
+    setError(null);
+    if (authenticated) void readPreferences(session);
+    else setLoading(false);
+    // Appearance belongs to the signed-in workspace, never to a browser token.
+    try {
+      localStorage.removeItem("telegram-clone-worker:theme");
+    } catch {
+      /* Browser storage is optional. */
+    }
+    return () => {
+      activeSession.current = false;
+      generation.current++;
+    };
+  }, [authenticated, readPreferences]);
+
+  const updatePreferences = useCallback(
+    (patch: PreferencePatch): Promise<boolean> => {
+      if (!authenticated || !activeSession.current)
+        return Promise.resolve(false);
+      if (!hasSavedSnapshot.current) {
+        setError(
+          (current) =>
+            current ?? "Load your saved settings before making changes.",
+        );
+        return Promise.resolve(false);
+      }
+      const session = generation.current;
+      const request = ++revision.current;
+      readSequence.current++;
+      pendingWrites.current++;
+      setLoading(false);
+      setPreferences((current) => ({ ...current, ...patch }));
+      setPending(pendingWrites.current);
+      setError(null);
+      const operation = writeQueue.current.then(async () => {
+        if (session !== generation.current || !activeSession.current)
+          return false;
+        try {
+          const result = await api.patch<WorkspacePreferences>(
+            "/api/preferences",
+            patch,
+          );
+          if (session !== generation.current || !activeSession.current)
+            return false;
+          let saved = result.ok;
+          if (result.ok) {
+            savedPreferences.current = result.data;
+          } else {
+            // A timeout can hide a successful server write. Read its actual state
+            // before rolling back or processing the next queued change.
+            const current =
+              await api.get<WorkspacePreferences>("/api/preferences");
+            if (session !== generation.current || !activeSession.current)
+              return false;
+            if (current.ok) {
+              savedPreferences.current = current.data;
+              saved = Object.entries(patch).every(
+                ([key, value]) =>
+                  current.data[key as keyof WorkspacePreferences] === value,
+              );
+            }
+            if (!saved)
+              setError(`Your change was not saved. ${result.description}`);
+          }
+          if (request === revision.current) {
+            setPreferences(savedPreferences.current);
+            if (saved) setError(null);
+          }
+          return saved;
+        } finally {
+          if (session === generation.current && activeSession.current) {
+            pendingWrites.current = Math.max(0, pendingWrites.current - 1);
+            setPending(pendingWrites.current);
+          }
+        }
+      });
+      // Keep writes ordered so rapid choices cannot restore an older theme.
+      writeQueue.current = operation.then(
+        () => undefined,
+        () => undefined,
+      );
+      return operation;
+    },
+    [authenticated],
+  );
+
+  const applied = authenticated && loaded ? preferences : DEFAULT_PREFERENCES;
+  const theme = applied.themeId;
+  const activeTheme = THEMES.find((option) => option.id === theme) ?? THEMES[0];
+  useLayoutEffect(() => {
+    const root = document.documentElement;
+    root.dataset.theme = theme;
+    root.dataset.navigation = activeTheme.navigation;
+    root.dataset.taskLayout = activeTheme.taskLayout;
+    root.dataset.settingsLayout = activeTheme.settingsLayout;
+    root.dataset.controlStyle = activeTheme.controlStyle;
+    root.dataset.mode = activeTheme.mode;
+    root.dataset.density = applied.density;
+    root.dataset.textSize = applied.textSize;
+    root.dataset.reduceMotion = String(applied.reduceMotion);
+    root.style.colorScheme = activeTheme.mode;
+  }, [
+    theme,
+    activeTheme,
+    applied.density,
+    applied.textSize,
+    applied.reduceMotion,
+  ]);
+
+  const retry = useCallback(async () => {
+    if (authenticated && activeSession.current && pendingWrites.current === 0) {
+      await readPreferences(generation.current);
+    }
+  }, [authenticated, readPreferences]);
+  const setTheme = useCallback(
+    (themeId: ThemeId) => updatePreferences({ themeId }),
+    [updatePreferences],
+  );
+  const value = useMemo(
+    () => ({
+      preferences: applied,
+      theme,
+      loading: authenticated && (!loaded || loading),
+      saving: pending > 0,
+      isSaving: pending > 0,
+      error,
+      updatePreferences,
+      setTheme,
+      retry,
+    }),
+    [
+      applied,
+      theme,
+      authenticated,
+      loaded,
+      loading,
+      pending,
+      error,
+      updatePreferences,
+      setTheme,
+      retry,
+    ],
+  );
+
   return (
-    <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
+    <PreferencesContext.Provider value={value}>
+      {children}
+    </PreferencesContext.Provider>
   );
 }
 
-export function useTheme() {
-  const context = useContext(ThemeContext);
-  if (!context) throw new Error("useTheme must be used within ThemeProvider");
-  return context;
+export function usePreferences() {
+  const value = useContext(PreferencesContext);
+  if (!value) throw new Error("Workspace preferences are unavailable.");
+  return value;
 }
+export const useTheme = usePreferences;

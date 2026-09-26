@@ -35,6 +35,10 @@ import {
   handleGetSavedTask,
   handleListSavedTasks,
 } from "./routes/api/savedTasks";
+import {
+  handleGetPreferences,
+  handlePatchPreferences,
+} from "./routes/api/preferences";
 import { runTick } from "./jobs/tick";
 import { ensureDatabaseBootstrap } from "./db/bootstrap";
 import {
@@ -115,6 +119,12 @@ async function handleRequest(request: Request, env: Env): Promise<Response> {
     // Protect all remaining /api/* endpoints
     const authError = await authenticateApiRequest(request, env);
     if (authError) return authError;
+
+    if (parts[1] === "preferences" && parts.length === 2) {
+      if (request.method === "GET") return handleGetPreferences(env);
+      if (request.method === "PATCH")
+        return handlePatchPreferences(request, env);
+    }
 
     const botId = url.searchParams.get("botId") ?? "";
     if (url.searchParams.has("token"))
