@@ -41,12 +41,6 @@ export async function validateApiRequest(
     );
   }
   if (!request.body) return request;
-  if (
-    request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !==
-    "application/json"
-  ) {
-    return apiError(415, "Send this request as JSON.");
-  }
   const lengthHeader = request.headers.get("Content-Length");
   if (lengthHeader && Number(lengthHeader) > MAX_BODY_BYTES)
     return apiError(413, "This request is too large.");
@@ -62,6 +56,16 @@ export async function validateApiRequest(
       return apiError(413, "This request is too large.");
     }
     chunks.push(value);
+  }
+  // Workers can expose a body stream even when DELETE has no payload.
+  // Count the actual bytes; a present stream is not proof of a JSON body.
+  if (length === 0 && request.method === "DELETE")
+    return new Request(request, { body: new Uint8Array(0) });
+  if (
+    request.headers.get("Content-Type")?.split(";")[0].trim().toLowerCase() !==
+    "application/json"
+  ) {
+    return apiError(415, "Send this request as JSON.");
   }
   const bytes = new Uint8Array(length);
   let offset = 0;

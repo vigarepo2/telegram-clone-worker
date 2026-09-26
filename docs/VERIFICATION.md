@@ -4,7 +4,7 @@ Checked on 26 September 2026 with Node.js 24 and Chromium.
 
 ## Automated checks
 
-`npm run check` passes TypeScript checking, 57 regression tests, and the production Worker/browser build. GitHub Actions runs the same command on pushes to `main` and pull requests.
+`npm run check` passes TypeScript checking, 61 regression tests, and the production Worker/browser build. GitHub Actions runs the same command on pushes to `main` and pull requests.
 
 The regression tests cover:
 
@@ -14,6 +14,7 @@ The regression tests cover:
 - Public and private Telegram message links, supported chat identifiers, and rejection of unrelated or deceptive URLs.
 - Compatibility with old extension selections: stored selections no longer filter incoming messages or carry into new saved setups.
 - Task classification after pausing combined history/new-message tasks, including completed history, cancelled history, and attention states.
+- Empty DELETE streams, deletion authorization, invalid-body rejection, cascading queue/activity cleanup, and preservation of saved setups.
 - Authenticated light/dark/system preferences, logout/login persistence, concurrent partial changes, obsolete theme settings, strict input validation, and database failures.
 
 The dependency audit reported no known vulnerabilities after updating the lockfile. An audit reflects the advisory database at the time it runs; it is not a guarantee about future issues.
@@ -21,6 +22,8 @@ The dependency audit reported no known vulnerabilities after updating the lockfi
 ## Browser checks
 
 First-time setup, sign-in, HttpOnly session cookies, and sign-out were exercised against the local Cloudflare Workers runtime and a local D1 database.
+
+Task, bot, and saved-setup deletion were also checked through the browser against the real local Worker and D1 using synthetic records, including cancelling the confirmation and compatibility with older empty DELETE requests.
 
 Telegram-dependent screens used synthetic API responses. These checks covered:
 
